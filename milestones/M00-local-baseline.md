@@ -1,9 +1,8 @@
 # M00 — Reproduce the local baseline
 
-Status: not started  
+Status: Accepted  
 Last edited: 2026-10-23  
 Prerequisites: None. Start here.  
-Owner review: pending
 
 [Overview](../../PROJECT_OVERVIEW.md) · [Milestone index](../../README.md)
 
@@ -56,7 +55,7 @@ Record working commands and configuration below. M01 may begin when the owner ac
 | --- | --- |
 | Checkout commit | `941c69fa7d82c7fd5f570ad7392833b8d0b83791` in `upstream/visualmatch` (detached HEAD, gitignored) |
 | Environment | `.venv`, Homebrew Python 3.13.7. Installed: gradio 6.18.0, requests 2.34.2, pillow 12.2.0, uvicorn 0.54.0. `python-dotenv==1.2.2` is listed and required by `api/app.py`. Torch, OpenCLIP, and FAISS are not installed. |
-| Dataset manifest | Pending |
+| Dataset manifest | Checked |
 | Model/index | `siglip_vitb16` (`ViT-B-16-SigLIP`, `webli`). Index and `metadata.json` downloaded 2026-10-24 from the author's HuggingFace Space `Sks123212/visualmatch` at revision `3be2e6250a4d07f84900a265c65769625b000327` into `upstream/visualmatch/embeddings/` (`search.py`'s default path; gitignored). `siglip_vitb16.index` sha256 `b5a6e44b…1f90dc` matches the published LFS oid. Selected with `VISUALMATCH_MODEL=siglip_vitb16` in the root `.env`. The CLIP indexes were not downloaded; the Space does not publish them. |
 | Index validation | Observed: `IndexFlatIP`, dim 768, `index.ntotal` = metadata length = dataset length = 52,591. `metadata[i]["index"] == i` for every row. `item_id`, `category1`, `category2` and `color` agree with the cached `Marqo/deepfashion-inshop` row at the same position for all 52,591 rows (0 mismatches). First 2,000 stored vectors are unit-norm. |
 | Search check | Observed on a throwaway instance (port 8002): `/search/image` with catalogue images 0, 1234 and 40000 returned each as rank 1 with score 1.0, so the ID-to-image mapping works. `/search/text` ("black dress") returned dresses. `/search/composed` returned 200. This verifies the plumbing only, not matching quality (M02). First request loads the model (about 12 s plus a one-off weight download). |

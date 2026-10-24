@@ -1,7 +1,7 @@
 # M01 — Persistent sessions and local images
 
-Status: not started  
-Last edited: 2026-10-23  
+Status: in progress (slices 1.1–1.4 implemented; acceptance checks pending, run by owner)  
+Last edited: 2026-10-24  
 Prerequisites: M00 accepted.  
 Owner review: pending
 
@@ -21,47 +21,47 @@ Extend the existing UI with session selection and history. Add PostgreSQL persis
 
 ### 1.1 Add persistence infrastructure
 
-- [ ] Add a local PostgreSQL setup, preferably Compose with a named persistent volume.
-- [ ] Keep connection settings in environment configuration; provide a secret-free example.
-- [ ] Add SQLAlchemy models and Alembic migrations for Session, Asset, Turn, SearchRun and SearchResult.
-- [ ] Use stable IDs, timestamps, foreign keys and unique per-session turn/per-run result ordering.
-- [ ] Store configuration as versioned structured data; do not store arbitrary Python objects.
-- [ ] Document start/stop, migrations and backup. Avoid destructive volume-reset commands in routine startup instructions.
+- [x] Add a local PostgreSQL setup, preferably Compose with a named persistent volume. (`compose.yaml`, volume `scanger_scanger_pgdata`, port 5433.)
+- [x] Keep connection settings in environment configuration; provide a secret-free example. (`.env.example`.)
+- [x] Add SQLAlchemy models and Alembic migrations for Session, Asset, Turn, SearchRun and SearchResult.
+- [x] Use stable IDs, timestamps, foreign keys and unique per-session turn/per-run result ordering.
+- [x] Store configuration as versioned structured data; do not store arbitrary Python objects. (`configuration_version` + JSONB.)
+- [x] Document start/stop, migrations and backup. Avoid destructive volume-reset commands in routine startup instructions. (`docs/persistence.md`; restore not yet tested.)
 
 The database stores history and metadata. Preserve the baseline vector index; do not install pgvector just to save sessions.
 
 ### 1.2 Make image uploads durable
 
-- [ ] Decode and validate supported image formats with byte and dimension limits.
-- [ ] Copy upload bytes out of temporary frontend storage into DATA_ROOT.
-- [ ] Store a generated relative storage key plus original filename, type, dimensions and hash.
-- [ ] Expose images by asset ID through controlled serving.
-- [ ] Reject absolute paths and traversal; never expose the whole filesystem as a static directory.
-- [ ] Define cleanup for a failed upload/database write and missing-file behaviour.
+- [x] Decode and validate supported image formats with byte and dimension limits. (JPEG/PNG/WebP, 10 MiB, 4096 px per side.)
+- [x] Copy upload bytes out of temporary frontend storage into DATA_ROOT. (The frontend posts Gradio's unmodified temp file, `image_mode=None`, to `POST /assets`; identical bytes reuse the existing asset.)
+- [x] Store a generated relative storage key plus original filename, type, dimensions and hash.
+- [x] Expose images by asset ID through controlled serving. (`GET /assets/{id}` in `scanger/api.py`.)
+- [x] Reject absolute paths and traversal; never expose the whole filesystem as a static directory.
+- [x] Define cleanup for a failed upload/database write and missing-file behaviour. (File removed on DB failure; orphans reported, never auto-deleted; missing file gives 404 `asset_file_missing`, row kept.)
 
 Do not expect the browser to disclose the original filesystem path. Store the durable app-owned copy's location. If a native file-path import is added later, make it a separate deliberate feature.
 
 ### 1.3 Persist a complete search turn
 
-- [ ] Create/select/rename a session.
-- [ ] Show the effective reference and text before search.
-- [ ] Save a turn and a pending run before inference.
-- [ ] Run retrieval using the existing adapter.
-- [ ] Commit ranked results and completed status together; store useful failure state on error.
-- [ ] Save dataset/model/index versions, search mode, result count and score semantics.
-- [ ] Prevent repeated UI events from accidentally duplicating a turn.
-- [ ] Reconcile interrupted pending/running jobs on restart as interrupted or retryable.
+- [x] Create/select/rename a session. (Titles are owner-entered.)
+- [x] Show the effective reference and text before search. (Live "Will search" summary: mode, reference source, description, image weight.)
+- [x] Save a turn and a pending run before inference.
+- [x] Run retrieval using the existing adapter. (`scanger/retrieval.py` calls the unmodified VisualMatch API over HTTP.)
+- [x] Commit ranked results and completed status together; store useful failure state on error.
+- [x] Save dataset/model/index versions, search mode, result count and score semantics. (Version strings are constants in `scanger/retrieval.py` taken from the M00 handoff.)
+- [x] Prevent repeated UI events from accidentally duplicating a turn. (Search button ignores clicks while pending; each draft carries a `client_request_id`, unique per session.)
+- [x] Reconcile interrupted pending/running jobs on restart as interrupted or retryable. (Scanger API startup marks them `interrupted`; "Run again" retries.)
 
 Each query is complete and explicit. Reusing an image is allowed if visible. A new text entry does not implicitly inherit all earlier constraints. A retry creates a new run linked to the same turn.
 
 ### 1.4 Add session history to the frontend
 
-- [ ] List sessions ordered by recent activity.
-- [ ] Open one session and display turns chronologically.
-- [ ] Show reference previews, prompts, run state and saved result grids.
-- [ ] Restore results from the database without rerunning retrieval.
-- [ ] Display a placeholder for a missing image while preserving the record.
-- [ ] Keep session selection separate from in-memory framework state.
+- [x] List sessions ordered by recent activity.
+- [x] Open one session and display turns chronologically.
+- [x] Show reference previews, prompts, run state and saved result grids. (Earlier runs of a turn are in collapsed sections.)
+- [x] Restore results from the database without rerunning retrieval.
+- [x] Display a placeholder for a missing image while preserving the record.
+- [x] Keep session selection separate from in-memory framework state. (Only the open session ID is held in Gradio state; history is re-read from the API on every render.)
 
 ## Acceptance checks
 
@@ -94,12 +94,24 @@ The owner can use this as a persistent local search tool. M02 can assess quality
 | Date | Task/change | Evidence or result | Next action |
 | --- | --- | --- | --- |
 | 2026-10-23 | Initial plan drafted | Documentation only | Review scope before implementation |
+| 2026-10-24 | Slice 1.1: Compose DB, config, models, initial migration `a15a2c540c2d` | Observed: `docker compose ps` healthy; `alembic upgrade head` created 5 tables; inserting an absolute `storage_key` was rejected by the CHECK constraint; `alembic_version` intact after `docker compose restart db`; `pg_dump` produced a 332-line dump with 6 tables | Owner review |
+| 2026-10-24 | Slice 1.2: `scanger/assets.py`, `scanger/api.py`, `tests/` | Observed: `python -m pytest` 30 passed (valid formats, malformed/truncated/GIF/oversize rejection, DB-failure file cleanup, traversal and symlink rejection, moved DATA_ROOT, missing file, HTTP upload/fetch). `uvicorn scanger.api:app` on 8010 answered `/health` 200 and unknown asset 404 against the real DB. Not done: frontend upload wiring, real-browser preview | Owner review, then slice 1.3 |
+| 2026-10-24 | Slices 1.3–1.4: migration `3377947419ef` (`turn.client_request_id`; unique constraints renamed to include all columns), `scanger/retrieval.py`, `catalogue.py`, `history.py`, API routes, `scanger/frontend.py` | Observed: `python -m pytest` 48 passed (fixture adapter; no model). `alembic check` reports no drift; downgrade/upgrade of the new revision works. Live smoke on a throwaway database against the running VisualMatch API: text, image and composed turns completed; a catalogue image used as reference returned itself at rank 1 with score 1.0; result and asset images served. Frontend on a throwaway port loaded the session list and created a session via its event API. Not verified: history rendering and upload in a real browser | Owner runs acceptance checks |
 
 ## Decisions and plan changes
 
 | Date | Decision | Reason / alternatives | Consequence |
 | --- | --- | --- | --- |
-| Pending | — | — | — |
+| 2026-10-24 | Own Compose project on host port 5433, container `scanger-db` | Port 5432 is used by another project's database, which must stay untouched | Scanger code connects via `DB_HOST`/`DB_PORT` |
+| 2026-10-24 | Session titles are owner-entered | Owner request; no inference from prompts | `session.title` is required |
+| 2026-10-24 | Upload limits: 10 MiB, 4096 px per side, JPEG/PNG/WebP | Owner accepted proposed defaults; configurable | Larger images are rejected with 413 |
+| 2026-10-24 | No deletion for now | Owner decision | Shared-asset cleanup stays undefined until deletion is added |
+| 2026-10-24 | Result items identified by `source_kind` + `source_item_id` + `image_locator` + JSONB metadata | Future web results will have different metadata | Dataset item ID is not assumed to be globally unique |
+| 2026-10-24 | Scanger's own FastAPI app (`scanger/api.py`) rather than editing the gitignored upstream API | Upstream edits are not versioned | — |
+| 2026-10-24 | Frontend → Scanger API → VisualMatch API (HTTP retrieval adapter) | Alternatives: frontend calling both APIs (persistence logic in the UI), or loading the model inside the Scanger API (couples torch to persistence). The chain keeps the frontend thin and upstream unmodified | Three processes; new Scanger frontend `scanger/frontend.py` on port 7861; upstream frontend still usable on 7860 |
+| 2026-10-24 | Search mode derived from inputs (image, text or both) | One form instead of three tabs; mode is stored per run | Composed uses the image-weight slider |
+| 2026-10-24 | Identical uploads reuse one asset; assets are shared and immutable | Avoids duplicate files when searching repeatedly with the same reference | Deletion (deferred) must check all referencing turns |
+| 2026-10-24 | Result count fixed at 10 | The VisualMatch API hardcodes `top_k=10` | `result_limit` is recorded per run |
 
 ## Exit review
 

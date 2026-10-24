@@ -4,3 +4,6 @@ __pycache__/
 .DS_Store
 .env
 upstream/
+
+# App-owned uploads (DATA_ROOT)
+user-data/
