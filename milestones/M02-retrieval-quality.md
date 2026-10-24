@@ -1,13 +1,20 @@
 # M02 — Evaluate and improve local matching
 
-Status: not started  
+Status: skipped  
 Last edited: 2026-10-23  
 Prerequisites: M01 accepted; local history is usable.  
-Owner review: pending
 
 [Overview](../../PROJECT_OVERVIEW.md) · [Milestone index](../../README.md)
 
-This is an editable build plan. Implement one agreed slice at a time; stop at the milestone boundary for owner review. No task below has been completed by creating this document.
+## Skipped
+
+This set up was AI-generated. It was kept for the rigerous sentiment, but it is too formal.
+Setting up such a controlled experiment is a good for conducting research.
+But the required time investment is an overkill since this is a hobby project.
+So the method for this will be trial & error - styled instead. Manual testing.
+
+
+---------------------------------------------------------------------------
 
 ## Outcome
 

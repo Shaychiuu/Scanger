@@ -42,8 +42,9 @@ def _services() -> list[Service]:
     return [
         Service(
             "visualmatch",
-            [py, "-m", "uvicorn", "api.app:app", "--host", HOST, "--port", str(_port(visualmatch_api_url()))],
-            str(REPO_ROOT / "upstream" / "visualmatch"),
+            # Upstream's app, wrapped so VISUALMATCH_MODEL=fashionclip works (see scanger/visualmatch_server.py).
+            [py, "-m", "uvicorn", "scanger.visualmatch_server:app", "--host", HOST, "--port", str(_port(visualmatch_api_url()))],
+            str(REPO_ROOT),
             _port(visualmatch_api_url()),
         ),
         Service(

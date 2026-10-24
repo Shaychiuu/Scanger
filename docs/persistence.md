@@ -24,8 +24,8 @@ The same three processes, each in its own terminal (database up first), for
 example when you want `--reload` on one of them:
 
 ```
-# 1. VisualMatch API (unchanged upstream; loads the model on the first search)
-cd upstream/visualmatch && uvicorn api.app:app --host 127.0.0.1 --port 8001
+# 1. VisualMatch API (upstream app, wrapped to also serve FashionCLIP; loads the model on the first search)
+uvicorn scanger.visualmatch_server:app --host 127.0.0.1 --port 8001
 
 # 2. Scanger API (sessions, uploads, history; forwards searches to 1.)
 uvicorn scanger.api:app --host 127.0.0.1 --port 8010

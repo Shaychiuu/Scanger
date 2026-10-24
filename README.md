@@ -1,8 +1,8 @@
 # Clothing Search — project documentation
 
-Created: 2026-10-23. Status: planning only; no application has been implemented or run.
+Created: 2026-10-24
 
-This is a documentation starter for a local, personally supervised clothing-search project developed in Cursor. Copy this folder's contents into the project repository. The overview is stable context; milestone files are editable build plans.
+This is a documentation starter for a local, personally supervised clothing-search project. The overview is stable context; milestone files are editable build plans.
 
 ## Start here
 
@@ -28,13 +28,6 @@ The immediate goal is a local image-and-text search experience over a fixed fash
 
 All milestones start **not started**. M00 is the recommended first task, not a claim that implementation is underway.
 
-## Working with Cursor
-
-Provide the overview and only the active milestone as primary context. An appropriate first request is:
-
-> Read PROJECT_OVERVIEW.md and docs/milestones/M00-local-baseline.md. Help me complete only the first unchecked task in M00. Inspect before changing anything, explain relevant choices, and keep the change small enough for me to review. Do not implement later milestones or delegate work to other agents. Update the milestone with what we actually verified.
-
-This is a suggested instruction to use during development, not an executable setup script. No agent rules, app code, credentials, dependencies or dataset files are included.
 
 ## Editing conventions
 
@@ -44,4 +37,5 @@ This is a suggested instruction to use during development, not an executable set
 - Preserve failure cases and reasons for changing direction.
 - Revise future milestones when learning changes the design.
 - Read [SOURCES.md](docs/SOURCES.md) for provenance and verification limits.
+
 

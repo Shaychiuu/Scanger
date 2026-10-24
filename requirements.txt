@@ -5,7 +5,8 @@
 # Transitive dependencies are intentionally unlisted. pip installs them
 # when these packages are installed. Jupyter is omitted.
 # M02 adds no packages: it judges the baseline and stores feedback in M01.
-# FashionCLIP is an optional later experiment and is not included.
+# FashionCLIP (scanger/fashionclip.py) loads through the pinned transformers below and
+# needs no extra package.
 #
 # PostgreSQL itself is a local server (Docker Compose in M01), not a pip package.
 # A dry-run on 2026-10-24 resolved these pins for CPython 3.13 on arm64 macOS

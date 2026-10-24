@@ -9,11 +9,14 @@ from typing import Any, Protocol
 
 import requests
 
+from scanger import fashionclip
+
 # Recorded on every run. Values come from the M00 handoff; update them when the
 # index, model or dataset changes so old runs stay distinguishable.
 VISUALMATCH_COMMIT = "941c69fa7d82c7fd5f570ad7392833b8d0b83791"
 INDEX_VERSIONS = {
     "siglip_vitb16": "siglip_vitb16.index@hf-space:Sks123212/visualmatch@3be2e6250a4d07f84900a265c65769625b000327",
+    fashionclip.MODEL_NAME: fashionclip.INDEX_VERSION,
 }
 DATASET_VERSION = "Marqo/deepfashion-inshop@886fbe26ceac0b2bc8195d606e3fde641e7157f8"
 DATASET_LOCATOR_PREFIX = "deepfashion-inshop:data:"
