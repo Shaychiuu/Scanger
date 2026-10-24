@@ -1,0 +1,39 @@
+# Direct dependencies for the local VisualMatch baseline, then M01 persistence.
+# VisualMatch source: https://github.com/soham-k-sinha/visualmatch
+# Commit: 941c69fa7d82c7fd5f570ad7392833b8d0b83791 (main, 2026-06-18)
+#
+# Transitive dependencies are intentionally unlisted. pip installs them
+# when these packages are installed. Jupyter is omitted.
+# M02 adds no packages: it judges the baseline and stores feedback in M01.
+# FashionCLIP is an optional later experiment and is not included.
+#
+# PostgreSQL itself is a local server (Docker Compose in M01), not a pip package.
+# A dry-run on 2026-10-24 resolved these pins for CPython 3.13 on arm64 macOS
+# without changing the packages already installed for the frontend.
+
+# Gradio UI, its HTTP client, and the dataset library the page imports.
+# Versions copied from the VisualMatch requirements freeze.
+gradio==6.18.0
+requests==2.34.2
+pillow==12.2.0
+python-dotenv==1.2.2
+datasets==5.0.0
+
+# Retrieval. Versions copied from the same freeze.
+# open_clip_torch brings timm, ftfy, safetensors, and regex.
+# torch brings networkx and sympy. faiss-cpu uses the installed numpy.
+torch==2.12.0
+torchvision==0.27.0
+open_clip_torch==3.3.0
+faiss-cpu==1.14.3
+
+# Not in the VisualMatch freeze, but ViT-B-16-SigLIP's tokenizer needs it:
+# SearchEngine failed to load with "No module named 'transformers'" without it.
+# The author's HuggingFace Space also lists it. Pulls in tokenizers.
+transformers==5.20.2
+
+# M01 sessions. Versions current on PyPI as of 2026-10-24; not in the VisualMatch freeze.
+# psycopg[binary] bundles libpq so the driver does not need a local Postgres build.
+sqlalchemy==2.1.6
+alembic==1.20.1
+psycopg[binary]==3.3.6
