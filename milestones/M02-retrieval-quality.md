@@ -9,9 +9,11 @@ Prerequisites: M01 accepted; local history is usable.
 ## Skipped
 
 This set up was AI-generated. It was kept for the rigerous sentiment, but it is too formal.
-Setting up such a controlled experiment is a good for conducting research.
+Setting up such a controlled experimentdnvironment is a good for conducting research.
 But the required time investment is an overkill since this is a hobby project.
 So the method for this will be trial & error - styled instead. Manual testing.
+
+Update: Retrieval quality is sufficient as we are now wrapping a finetuned Fashion Clip. 
 
 
 ---------------------------------------------------------------------------

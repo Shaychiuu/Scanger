@@ -57,6 +57,27 @@ def visualmatch_model() -> str | None:
     return os.environ.get("VISUALMATCH_MODEL") or None
 
 
+def cursor_api_key() -> str | None:
+    return os.environ.get("CURSOR_API_KEY", "").strip() or None
+
+
+def interpret_model() -> str | None:
+    return os.environ.get("INTERPRET_MODEL", "").strip() or None
+
+
+def interpret_model_params() -> dict[str, str]:
+    """Parse INTERPRET_MODEL_PARAMS, e.g. "thinking=false,effort=low"."""
+    params = {}
+    for item in os.environ.get("INTERPRET_MODEL_PARAMS", "").split(","):
+        if not item.strip():
+            continue
+        key, sep, value = item.partition("=")
+        if not sep or not key.strip() or not value.strip():
+            raise RuntimeError(f"INTERPRET_MODEL_PARAMS entry {item!r} is not id=value.")
+        params[key.strip()] = value.strip()
+    return params
+
+
 def data_root() -> Path:
     raw = Path(os.environ.get("DATA_ROOT", "./user-data")).expanduser()
     return (raw if raw.is_absolute() else REPO_ROOT / raw).resolve()

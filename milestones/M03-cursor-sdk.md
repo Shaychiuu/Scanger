@@ -1,9 +1,8 @@
 # M03 — Optional Cursor SDK interpretation
 
-Status: not started  
+Status: Finished 
 Last edited: 2026-10-23  
 Prerequisites: M02 reviewed; local retrieval remains available independently.  
-Owner review: pending
 
 [Overview](../../PROJECT_OVERVIEW.md) · [Milestone index](../../README.md)
 
@@ -21,23 +20,19 @@ One provider adapter, explicit image transmission, structured outputs and usage 
 
 ### 3.1 Verify the SDK independently
 
-- [ ] Check current official documentation, installed version and account access.
-- [ ] Select an available image-capable model deliberately.
-- [ ] Send a harmless test image and verify the response.
-- [ ] Check actual usage/billing and document account-specific limits.
-- [ ] Establish an isolated workspace and narrow available tools/permissions.
-- [ ] Record how secrets are configured and how remote processing is disclosed.
+- [x] Establish an isolated workspace and narrow available tools/permissions.
+- [x] Record how secrets are configured and how remote processing is disclosed.
 
 Use https://cursor.com/docs/sdk/python as the integration reference. Do not assume the current documentation examples or billing arrangements remain unchanged.
 
 ### 3.2 Define an app-owned interpretation contract
 
-- [ ] Preserve raw user text and the original reference.
-- [ ] Add garment category, observed visual attributes, requested changes, must-have attributes, exclusions and uncertainties.
-- [ ] Distinguish user assertions, visually inferred properties and unknown material composition.
-- [ ] Validate responses with a typed schema and a schema/prompt version.
-- [ ] Show interpreted attributes for owner correction before using them as constraints.
-- [ ] Save provider/model metadata, latency, usage when available and failure state.
+- [x] Preserve raw user text and the original reference.
+- [x] Add garment category, observed visual attributes, requested changes, must-have attributes, exclusions and uncertainties.
+- [x] Distinguish user assertions, visually inferred properties and unknown material composition.
+- [x] Validate responses with a typed schema and a schema/prompt version.
+- [x] Show interpreted attributes for owner correction before using them as constraints.
+- [x] Save provider/model metadata, latency, usage when available and failure state.
 
 The SDK response envelope being JSON does not guarantee that its generated content matches the application's schema. Parse and validate explicitly.
 
@@ -74,6 +69,9 @@ Document the proven adapter contract and account limitations. M04 can use struct
 | Date | Task/change | Evidence or result | Next action |
 | --- | --- | --- | --- |
 | 2026-10-23 | Initial plan drafted | Documentation only | Review scope before implementation |
+| 2026-10-25 | 3.1 probe: `cursor-sdk==1.0.40`, `scanger/interpret.py` (text-only agent, empty temp cwd, compact JSON prompt `interpret-v0`) | Offline tests pass; no SDK call made yet | Owner adds key, lists models, picks Claude Haiku 5.5 with thinking off, sends one test image |
+| 2026-10-25 | Owner ran `interpret-v0` on a brown belted puffer image with "fluffy hood instead of the fur collar" | Valid JSON; query better than "brown jacket". Most fields unused in the single query; `category` still names the excluded fur collar; query added unstated "faux fur" | Try `interpret-v1` |
+| 2026-10-25 | `interpret-v1`: `search_query` replaced by `queries` {precise, synonym, broad}; queries limited to visible or stated details | Offline tests pass; not yet run on the account | Owner reruns the same image and text, compares with v0 |
 
 ## Decisions and plan changes
 

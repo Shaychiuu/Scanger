@@ -1,9 +1,8 @@
 # M01 — Persistent sessions and local images
 
-Status: in progress (slices 1.1–1.4 implemented; acceptance checks pending, run by owner)  
+Status: Finished
 Last edited: 2026-10-24  
 Prerequisites: M00 accepted.  
-Owner review: pending
 
 [Overview](../../PROJECT_OVERVIEW.md) · [Milestone index](../../README.md)
 

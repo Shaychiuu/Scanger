@@ -39,5 +39,10 @@ sqlalchemy==2.1.6
 alembic==1.20.1
 psycopg[binary]==3.3.6
 
+# M03 hosted interpretation (optional; local search works without a key).
+# Current on PyPI on 2026-10-25; only this package was new, its httpx dependency was
+# already installed. Docs: https://cursor.com/docs/sdk/python
+cursor-sdk==1.0.40
+
 # Tests (M01). Persistence tests use a throwaway "scanger_test" database on the Compose DB.
 pytest==9.1.1
