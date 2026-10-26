@@ -20,7 +20,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from PIL import Image
+from PIL import Image, ImageOps
 from sqlalchemy import select
 from sqlalchemy.orm import Session as OrmSession
 
@@ -108,6 +108,21 @@ def inspect_image(data: bytes, limits: UploadLimits) -> ImageInfo:
         sha256=hashlib.sha256(data).hexdigest(),
         byte_size=len(data),
     )
+
+
+def without_metadata(data: bytes, info: ImageInfo) -> bytes:
+    """Re-encode an inspected image without EXIF/XMP/text chunks (e.g. GPS
+    location, camera serial) for sending to a remote service. EXIF orientation
+    is applied to the pixels first, so the image still looks the same."""
+    with Image.open(io.BytesIO(data)) as image:
+        image = ImageOps.exif_transpose(image)
+        fmt = next(f for f, (mime, _) in SUPPORTED_FORMATS.items() if mime == info.mime_type)
+        if fmt == "JPEG" and image.mode not in ("RGB", "L"):
+            image = image.convert("RGB")
+        out = io.BytesIO()
+        options = {"quality": 95} if fmt in ("JPEG", "WEBP") else {}
+        image.save(out, fmt, **options)
+    return out.getvalue()
 
 
 def resolve_storage_key(storage_key: str, data_root: Path) -> Path:

@@ -16,6 +16,15 @@ These documents distinguish external descriptions from proposed architecture. Do
 | [FashionCLIP](https://github.com/patrickjohncyh/fashion-clip) | Optional retrieval experiment |
 | [Crawl4AI](https://github.com/unclecode/crawl4ai) | Candidate later extraction component |
 | [SerpApi Lens](https://serpapi.com/google-lens-api) | Candidate visual discovery integration; revalidate at M04 |
+| [SerpApi Image API](https://serpapi.com/image-api) | Direct image upload for Lens (500 KB, 10-minute ID); checked 2026-10-25 |
+| [Google LLC v. SerpApi docket](https://www.courtlistener.com/docket/72059948/google-llc-v-serpapi-llc/) | Provider continuity risk; pending as of 2026-10-25 |
+| [Google Custom Search JSON API](https://developers.google.com/custom-search/v1/overview) | Closed to new customers; ends 2027-01-01 |
+| [Brave Search API](https://brave.com/search/api/) | Independent-index comparison for M04.1; $5 per 1,000 requests as of 2026-10-25 |
+| [SerpApi Google Search API](https://serpapi.com/search-api) | Organic route: `q`, `gl`, `hl`, `google_domain`, `location`; `site:` supported; 1 h free cache |
+| [SerpApi Google Shopping API](https://serpapi.com/google-shopping-api) | Shopping route: ~40 results, no pagination; `product_link` is a Google page, the shop URL needs a further `google_immersive_product` search; `small_business` filter |
+| [SerpApi Account API](https://serpapi.com/account-api) | Free quota check; its body also contains the API key and account e-mail |
+| [SerpApi status and error codes](https://serpapi.com/api-status-and-error-codes) | 401 key, 429 quota/throughput, 200 + `error` for empty results |
+| [SerpApi pricing](https://serpapi.com/pricing) | Free plan 250 searches/month, 50/hour, checked 2026-10-26 |
 
 ## Interpretation of this research
 

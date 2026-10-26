@@ -177,15 +177,29 @@ def interpret(
     selection: ModelSelection,
     api_key: str,
 ) -> InterpretationRun:
-    record = InterpretationRun(
-        model=selection.id,
-        params={p.id: p.value for p in selection.params},
-        prompt_version=PROMPT_VERSION,
-        status="not_started",
-    )
     message = UserMessage(
         text=build_prompt(user_text),
         images=[SDKImage.from_data(image_bytes, mime_type)],
+    )
+    record = run_prompt(message, selection, api_key, "scanger-interpret-probe", PROMPT_VERSION)
+    if record.status == "finished":
+        record.data, record.problems = validate_interpretation(record.raw_text)
+    return record
+
+
+def run_prompt(
+    message: UserMessage,
+    selection: ModelSelection,
+    api_key: str,
+    agent_name: str,
+    prompt_version: str,
+) -> InterpretationRun:
+    """Send one message to a tool-less agent in an empty temp dir; no validation."""
+    record = InterpretationRun(
+        model=selection.id,
+        params={p.id: p.value for p in selection.params},
+        prompt_version=prompt_version,
+        status="not_started",
     )
     started = time.monotonic()
     try:
@@ -193,7 +207,7 @@ def interpret(
             options = AgentOptions(
                 model=selection,
                 api_key=api_key,
-                name="scanger-interpret-probe",
+                name=agent_name,
                 local=LocalAgentOptions(cwd=workspace),
                 tools=[],
             )
@@ -222,10 +236,6 @@ def interpret(
         record.duration_s = time.monotonic() - started
         record.status = "startup_error"
         record.error = f"{type(exc).__name__}: {exc.message} (retryable={exc.is_retryable})"
-        return record
-
-    if record.status == "finished":
-        record.data, record.problems = validate_interpretation(record.raw_text)
     return record
 
 

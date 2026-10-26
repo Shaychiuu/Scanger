@@ -44,5 +44,11 @@ psycopg[binary]==3.3.6
 # already installed. Docs: https://cursor.com/docs/sdk/python
 cursor-sdk==1.0.40
 
+# M04 web discovery. SerpApi is called with `requests` (already above); no SerpApi SDK.
+# tldextract gives registrable domains from the Public Suffix List. Scanger uses only its
+# bundled snapshot (no download, no cache). Current on PyPI on 2026-10-26; also pulled in
+# requests-file 3.0.1.
+tldextract==5.4.0
+
 # Tests (M01). Persistence tests use a throwaway "scanger_test" database on the Compose DB.
 pytest==9.1.1

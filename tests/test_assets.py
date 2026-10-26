@@ -180,3 +180,24 @@ def test_unknown_and_missing_assets_have_distinct_errors(client, data_root):
         file.unlink()
     missing = client.get(created["url"])
     assert (missing.status_code, missing.json()["detail"]) == (404, "asset_file_missing")
+
+
+# --- sending to remote services --------------------------------------------
+
+
+@pytest.mark.parametrize("fmt", ["JPEG", "PNG", "WEBP"])
+def test_without_metadata_drops_exif_but_keeps_orientation(limits, fmt):
+    exif = Image.Exif()
+    exif[0x0112] = 6  # Orientation: display rotated 90 degrees
+    exif[0x010F] = "SecretCam"  # camera make
+    buffer = io.BytesIO()
+    Image.new("RGB", (40, 30), (200, 30, 30)).save(buffer, format=fmt, exif=exif)
+    data = buffer.getvalue()
+    with Image.open(io.BytesIO(data)) as original:
+        assert original.getexif().get(0x010F) == "SecretCam"
+
+    cleaned = assets.without_metadata(data, assets.inspect_image(data, limits))
+    with Image.open(io.BytesIO(cleaned)) as image:
+        assert image.format == fmt
+        assert dict(image.getexif()) == {}
+        assert image.size == (30, 40)

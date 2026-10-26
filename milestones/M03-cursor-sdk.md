@@ -38,9 +38,9 @@ The SDK response envelope being JSON does not guarantee that its generated conte
 
 ### 3.3 Connect interpretation to the local workflow
 
-- [ ] Put SDK calls behind an optional adapter.
+- [x] Put SDK calls behind an optional adapter.
 - [ ] Keep image-only/text-only baseline searches working without credentials.
-- [ ] Use corrected attributes to construct a query while retaining the original request.
+- [x] Use corrected attributes to construct a query while retaining the original request.
 - [ ] Apply timeout and bounded retry behaviour.
 - [ ] Test cancellation or interrupted-run handling.
 - [ ] If justified, compare a small shortlist using a fixed attribute rubric.
@@ -79,10 +79,4 @@ Document the proven adapter contract and account limitations. M04 can use struct
 | --- | --- | --- | --- |
 | Pending | — | — | — |
 
-## Exit review
-
-- [ ] Acceptance checks recorded with actual results.
-- [ ] Known limitations and unresolved questions updated.
-- [ ] Relevant overview decisions brought up to date.
-- [ ] Owner reviewed outcome and selected the next step.
 

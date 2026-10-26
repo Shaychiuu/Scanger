@@ -78,6 +78,15 @@ def interpret_model_params() -> dict[str, str]:
     return params
 
 
+def serpapi_api_key() -> str | None:
+    return os.environ.get("SERPAPI_API_KEY", "").strip() or None
+
+
+def discovery_config_path() -> Path:
+    raw = Path(os.environ.get("DISCOVERY_CONFIG", "discovery.toml")).expanduser()
+    return (raw if raw.is_absolute() else REPO_ROOT / raw).resolve()
+
+
 def data_root() -> Path:
     raw = Path(os.environ.get("DATA_ROOT", "./user-data")).expanduser()
     return (raw if raw.is_absolute() else REPO_ROOT / raw).resolve()

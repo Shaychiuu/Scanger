@@ -1,0 +1,232 @@
+# M04 web discovery settings, read by `python -m scanger.discover`.
+# Edit freely. Every run saves a copy of the settings it used, so results stay
+# comparable. Unknown keys are rejected to catch typos.
+# Values marked ASSUMPTION are first guesses; see milestones/M04-web-discovery.md.
+
+# Markets searched, in this order: a language + country pair, each defined in a
+# [locales.<id>] table below. Queries are per language and shared by its markets.
+# Owner note 2026-10-26: GB for English; DE and AT for German; FR for French.
+markets = ["en-gb", "de-de", "de-at", "fr-fr", "it-it"]
+
+# Hard limit on SerpApi searches per discovery run (at most 50). Free plan: 250/month, 50/hour.
+# ASSUMPTION: ~20 per run (owner decision 2026-10-25) = about 12 runs per free month.
+max_calls = 20
+
+# Results kept per call after normalization (raw responses keep everything).
+# Organic calls return about 10, shopping calls about 40.
+max_leads_per_call = 10
+
+# Soft caps move extra results from one source to the end of the list; nothing is dropped.
+soft_cap_per_source = 3
+# Marketplace results without a known seller (e.g. organic Etsy links) may come
+# from many different sellers, so they get a higher cap.
+soft_cap_per_marketplace = 6
+
+# Bare domains for "site:" organic queries, used by steps with with_sites = true.
+# Etsy listings are on etsy.com in every language (etsy.com/de/listing/...).
+site_targets = ["etsy.com"]
+
+# (TOML: all top-level keys must stay above the first [table] header.)
+
+# --- Query plan ----------------------------------------------------------------
+# Steps are expanded in order, each into one call per market (and per modifier
+# or site where enabled), until max_calls is reached. Later steps are cut first.
+#   query:          precise | synonym | broad  (from the interpretation/localization)
+#   route:          organic (Google web results) | shopping (Google Shopping)
+#   with_modifiers: append each small-maker modifier of that language (below)
+#   with_sites:     add "site:<domain>" for each entry in site_targets (organic only)
+#   small_business: Google Shopping "small business" filter (shopping only;
+#                   ASSUMPTION: probably only effective in some countries, e.g. the US)
+# With 5 markets, the first 4 steps below fill the 20 calls; the rest are cut
+# (shown as "skipped_budget" in the plan). Reorder steps to change what is cut.
+
+[[steps]]
+query = "precise"
+route = "shopping"
+
+[[steps]]
+query = "precise"
+route = "organic"
+
+[[steps]]
+query = "broad"
+route = "organic"
+with_modifiers = true
+
+[[steps]]
+query = "broad"
+route = "organic"
+with_sites = true
+
+# Cut by the default budget; raise max_calls, use fewer --markets or reorder.
+[[steps]]
+query = "broad"
+route = "shopping"
+
+[[steps]]
+query = "synonym"
+route = "organic"
+
+# --- Small-maker modifiers, per language ----------------------------------------
+# Appended to the query, one call per modifier. Letters, spaces, hyphens and
+# apostrophes only. An empty list skips that language in modifier steps.
+# ASSUMPTION: first guesses at terms small labels use; refine from results.
+[modifiers]
+en = ["handmade"]
+de = ["handgemacht"]
+fr = ["fait main"]
+it = ["artigianale"]
+# More to try: en "independent designer", "small batch"; de "Manufaktur",
+# "kleines Label"; fr "créateur", "atelier"; it "made in Italy", "sartoriale".
+
+# --- Locales (markets) --------------------------------------------------------------
+# Defining a market here does not search it; list it in `markets` (or pass --markets).
+# language: which queries and modifiers to use.
+# country: SerpApi `gl` (note: SerpApi uses "uk", not "gb", for the United Kingdom).
+# google_domain: Google domain to search. hl: interface language (default: language).
+# location: optional city-level origin, e.g. "Vienna, Austria" (SerpApi locations
+# API). Without it, SerpApi may use its proxy's location for some signals.
+
+[locales.en-gb]
+# Note: the UK is outside the EU, so UK shops can mean customs for EU buyers.
+language = "en"
+country = "uk"
+google_domain = "google.co.uk"
+
+[locales.en-ie]
+# English-language EU market; try with --markets en-ie.
+language = "en"
+country = "ie"
+google_domain = "google.ie"
+
+[locales.de-de]
+language = "de"
+country = "de"
+google_domain = "google.de"
+
+[locales.de-at]
+language = "de"
+country = "at"
+google_domain = "google.at"
+
+[locales.de-ch]
+# Outside the EU (customs); try with --markets de-ch.
+language = "de"
+country = "ch"
+google_domain = "google.ch"
+
+[locales.fr-fr]
+language = "fr"
+country = "fr"
+google_domain = "google.fr"
+
+[locales.it-it]
+language = "it"
+country = "it"
+google_domain = "google.it"
+
+# --- Platform recognition --------------------------------------------------------
+# Matched on a result's registrable domain label (zalando.de -> "zalando") or the
+# start of the merchant name a shopping result shows ("Etsy", "eBay - shop42").
+# kind: marketplace | second_hand | social | aggregator | retailer
+# ASSUMPTION: a starter list; add the large retailers that crowd your results.
+
+[platforms.etsy]
+kind = "marketplace"
+labels = ["etsy"]
+
+[platforms.amazon]
+kind = "marketplace"
+labels = ["amazon"]
+
+[platforms.ebay]
+kind = "marketplace"
+labels = ["ebay"]
+
+[platforms.zalando]
+kind = "marketplace"
+labels = ["zalando"]
+
+[platforms.otto]
+kind = "marketplace"
+labels = ["otto"]
+
+[platforms.aboutyou]
+kind = "marketplace"
+labels = ["aboutyou"]
+
+[platforms.notonthehighstreet]
+kind = "marketplace"
+labels = ["notonthehighstreet"]
+
+[platforms.temu]
+kind = "marketplace"
+labels = ["temu"]
+
+[platforms.aliexpress]
+kind = "marketplace"
+labels = ["aliexpress"]
+
+[platforms.shein]
+kind = "retailer"
+labels = ["shein"]
+
+[platforms.asos]
+kind = "retailer"
+labels = ["asos"]
+
+[platforms.vinted]
+kind = "second_hand"
+labels = ["vinted"]
+
+[platforms.depop]
+kind = "second_hand"
+labels = ["depop"]
+
+[platforms.vestiairecollective]
+kind = "second_hand"
+labels = ["vestiairecollective"]
+
+[platforms.kleinanzeigen]
+kind = "second_hand"
+labels = ["kleinanzeigen"]
+
+[platforms.pinterest]
+kind = "social"
+labels = ["pinterest"]
+
+[platforms.instagram]
+kind = "social"
+labels = ["instagram"]
+
+[platforms.facebook]
+kind = "social"
+labels = ["facebook"]
+
+[platforms.tiktok]
+kind = "social"
+labels = ["tiktok"]
+
+[platforms.youtube]
+kind = "social"
+labels = ["youtube"]
+
+[platforms.reddit]
+kind = "social"
+labels = ["reddit"]
+
+[platforms.lyst]
+kind = "aggregator"
+labels = ["lyst"]
+
+[platforms.shopstyle]
+kind = "aggregator"
+labels = ["shopstyle"]
+
+[platforms.modesens]
+kind = "aggregator"
+labels = ["modesens"]
+
+[platforms.idealo]
+kind = "aggregator"
+labels = ["idealo"]
