@@ -13,7 +13,7 @@ from cursor_sdk import ModelSelection, UserMessage
 from scanger.interpret import QUERY_KEYS, InterpretationRun, run_prompt
 from scanger.leads import clean_text
 
-PROMPT_VERSION = "localize-v1"
+PROMPT_VERSION = "localize-v2"
 MAX_QUERY_CHARS = 150
 LANGUAGE_NAMES = {
     "en": "English", "de": "German", "fr": "French", "it": "Italian", "es": "Spanish",
@@ -34,8 +34,17 @@ use in product titles. Do not translate word for word.
 the requested changes.
 - synonym: the same intent in at most 10 words, with different common retail terms.
 - broad: 3 to 5 words; garment type, colour and the main requested change only.
-Use only details in the description. No brand names unless the description has \
-them. No quotation marks, no search operators, nothing from "exclude".
+
+Rules for every query:
+- Use only details in the description. No brand names unless the description \
+has them. No quotation marks, no search operators, nothing from "exclude".
+- Write correct, natural text in the target language: adjectives agree with \
+the noun in gender, number and case, in the word order a native shopper uses.
+- Keep the description's certainty. Do not turn a look into a material or \
+filling claim: a puffer jacket is not necessarily down, a fur collar not \
+necessarily real fur. Prefer the neutral retail term unless the description \
+names the material.
+- Name each feature once per query; keep alternative terms for "synonym".
 
 Targets:
 {targets}

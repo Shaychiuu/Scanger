@@ -2,6 +2,7 @@ from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import create_engine
+from sqlalchemy.pool import NullPool
 
 from scanger.config import database_url
 from scanger.models import Base
@@ -26,8 +27,9 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     # Built directly (not via config.set_main_option) so passwords containing
-    # "%" are not mangled by ConfigParser interpolation.
-    engine = create_engine(database_url())
+    # "%" are not mangled by ConfigParser interpolation. NullPool closes the
+    # connection when done, so nothing stays open on the migrated database.
+    engine = create_engine(database_url(), poolclass=NullPool)
     with engine.connect() as connection:
         context.configure(
             connection=connection,

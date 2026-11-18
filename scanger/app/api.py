@@ -8,7 +8,6 @@ Run from the repository root:
 """
 
 import uuid
-from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from pathlib import Path
@@ -18,15 +17,15 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session as OrmSession
 
-from scanger import assets, catalogue, history
+from scanger import assets, catalogue, discovery_api, discovery_service, history
 from scanger.config import (
     UploadLimits,
     data_root,
-    upload_limits,
     visualmatch_api_url,
     visualmatch_model,
 )
 from scanger.db import get_session_factory
+from scanger.deps import get_data_root, get_db, get_limits
 from scanger.models import Asset, SearchResult, SearchRun, Session, Turn
 from scanger.retrieval import RetrievalAdapter, VisualMatchHttpAdapter
 
@@ -39,23 +38,14 @@ async def lifespan(app: FastAPI):
         count = history.reconcile_interrupted_runs(db)
     if count:
         print(f"Marked {count} unfinished search run(s) as interrupted.")
+    count = discovery_service.reconcile_interrupted(data_root())
+    if count:
+        print(f"Finished {count} interrupted web discovery run(s) with the results saved so far.")
     yield
 
 
 app = FastAPI(title="Scanger API", lifespan=lifespan)
-
-
-def get_db() -> Iterator[OrmSession]:
-    with get_session_factory()() as db:
-        yield db
-
-
-def get_data_root() -> Path:
-    return data_root()
-
-
-def get_limits() -> UploadLimits:
-    return upload_limits()
+app.include_router(discovery_api.router)
 
 
 @lru_cache

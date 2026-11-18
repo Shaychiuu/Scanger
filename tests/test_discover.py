@@ -75,6 +75,10 @@ def test_repository_settings_file_is_valid():
         ({"locales": {"de-de": {"language": "de", "country": "de", "google_domain": "evil.com"}}}, "google_domain"),
         ({"platforms": {"shopx": {"kind": "shop", "labels": ["x1"]}}}, "kind must be one of"),
         ({"platforms": {"Bad Name": {"kind": "retailer", "labels": ["x1"]}}}, "platforms.Bad Name"),
+        ({"platforms": {"etsy": {"kind": "marketplace", "labels": ["etsy"], "product_path": "(listing"}}},
+         "product_path is not a valid regular expression"),
+        ({"platforms": {"etsy": {"kind": "marketplace", "labels": ["etsy"], "product_path": ""}}},
+         "product_path must be"),
     ],
 )
 def test_invalid_settings_are_rejected(changes, message):
@@ -165,10 +169,11 @@ def test_localization_reply_validation():
 
 def test_localization_prompt_sends_interpretation_but_not_uncertainties():
     interpretation = {"category": "puffer jacket", "observed": ["brown"], "requested_changes": [],
-                      "must_have": [], "exclude": [], "uncertain": ["material"],
+                      "must_have": [], "exclude": [], "uncertain": ["lining composition"],
                       "queries": {"precise": "a", "synonym": "b", "broad": "c"}}
     prompt = localize_prompt(interpretation, {"de": ["de", "at"]})
-    assert "puffer jacket" in prompt and "material" not in prompt
+    assert "puffer jacket" in prompt
+    assert "lining composition" not in prompt and '"uncertain"' not in prompt
     assert '["de"]' in prompt and "German, for shops serving DE, AT" in prompt
 
 

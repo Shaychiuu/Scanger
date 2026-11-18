@@ -12,7 +12,9 @@ Only provider-hosted thumbnail URLs are kept, and nothing here fetches them.
 Prices, ratings and delivery text are search-result claims, never verified.
 """
 
+import functools
 import ipaddress
+import math
 import re
 import unicodedata
 from collections import Counter
@@ -29,7 +31,10 @@ _EXTRACT = tldextract.TLDExtract(
 
 MAX_URL_LENGTH = 2048
 MAX_TITLE_LENGTH = 300
+MAX_SNIPPET_LENGTH = 320
 MAX_SHORT_TEXT = 120
+MAX_EXTENSION_LENGTH = 60
+MAX_EXTENSIONS = 4
 
 TRACKING_PARAMS = frozenset({
     "gclid", "gclsrc", "dclid", "gbraid", "wbraid", "fbclid", "msclkid", "yclid",
@@ -37,6 +42,8 @@ TRACKING_PARAMS = frozenset({
     "mkt_tok", "spm", "ref", "ref_",
 })
 TRACKING_PREFIXES = ("utm_",)
+# Left out of the deduplication key only: page 2 of a listing is the same lead.
+PAGINATION_PARAMS = frozenset({"page"})
 
 PRODUCT_PATH = re.compile(
     r"/(products?|produkte?|produit|prodotto|artikel|articolo|item|itm|listing|dp|p)/[^/]",
@@ -46,6 +53,8 @@ CATEGORY_PATH = re.compile(
     r"/(collections?|category|categories|kategorie|categorie|categoria|c|search|s)(/|$)",
     re.IGNORECASE,
 )
+LISTING_PARAMS = frozenset({"q", "query", "search", "page"})
+_AMOUNT = re.compile(r"\d(?:[\d.,'\u00a0\u202f ]*\d)?")
 
 _UNSAFE_CATEGORIES = {"Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"}
 
@@ -59,6 +68,8 @@ class PlatformRule:
     name: str
     kind: str  # marketplace | second_hand | social | aggregator | retailer
     labels: tuple[str, ...]
+    # Regex searched in the URL path of product pages; other pages there are listings.
+    product_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -114,6 +125,10 @@ class Lead:
     reviews: int | None
     delivery: str | None
     thumbnail: str | None
+    snippet: str | None = None  # organic: the text Google shows under the title
+    old_price: str | None = None  # shopping: the struck-through price of a sale
+    condition: str | None = None  # shopping: second-hand condition as shown, e.g. "gebraucht"
+    extensions: list[str] = field(default_factory=list)  # short notes shown, e.g. "SALE", "Auf Lager"
     rank: int = 0
     over_soft_cap: bool = False
     also_found: list[dict[str, int]] = field(default_factory=list)
@@ -181,7 +196,9 @@ def check_url(raw: Any) -> CheckedUrl:
     path = parts.path or "/"
     url = urlunsplit((scheme, ascii_host, path, query, ""))
     key_host = ascii_host[4:] if ascii_host.startswith("www.") else ascii_host
-    key = key_host + (path.rstrip("/") or "/") + ("?" + "&".join(sorted(kept)) if kept else "")
+    key_params = sorted(seg for seg in kept
+                        if unquote_plus(seg.partition("=")[0]).lower() not in PAGINATION_PARAMS)
+    key = key_host + (path.rstrip("/") or "/") + ("?" + "&".join(key_params) if key_params else "")
     return CheckedUrl(
         url=url,
         key=key,
@@ -190,6 +207,21 @@ def check_url(raw: Any) -> CheckedUrl:
         site_label=ext.domain,
         idn=any(label.startswith("xn--") for label in ascii_host.split(".")),
     )
+
+
+def encode_query_spaces(raw: Any) -> Any:
+    """Percent-encode plain spaces in the query part of a URL.
+
+    SerpApi builds Google Shopping product links with the search text
+    unencoded ("...&q=braune Steppjacke&prds=..."). Only U+0020 after the
+    "?" is encoded; any other whitespace or control character still fails
+    check_url.
+    """
+    if not isinstance(raw, str) or "?" not in raw:
+        return raw
+    base, _, rest = raw.partition("?")
+    query, hash_mark, fragment = rest.partition("#")
+    return f"{base}?{query.replace(' ', '%20')}{hash_mark}{fragment}"
 
 
 def unwrap_google_redirect(checked: CheckedUrl) -> CheckedUrl:
@@ -217,13 +249,42 @@ def provider_thumbnail(raw: Any) -> str | None:
     return None
 
 
-def page_hint(url: str) -> str | None:
+@functools.lru_cache(maxsize=64)
+def _path_pattern(pattern: str) -> re.Pattern:
+    return re.compile(pattern)
+
+
+def page_hint(url: str, platform: PlatformRule | None = None) -> str | None:
+    """A URL-path guess. A platform's own product_path decides for its pages;
+    other sites get the generic patterns, or None when nothing matches."""
     parts = urlsplit(url)
+    if platform is not None and platform.product_path:
+        return "product_like" if _path_pattern(platform.product_path).search(parts.path) else "category_like"
     if PRODUCT_PATH.search(parts.path):
         return "product_like"
-    if CATEGORY_PATH.search(parts.path) or any(k in ("q", "query", "search") for k, _ in parse_qsl(parts.query)):
+    if CATEGORY_PATH.search(parts.path) or any(k in LISTING_PARAMS for k, _ in parse_qsl(parts.query)):
         return "category_like"
     return None
+
+
+def parse_amount(text: str | None) -> float | None:
+    """The first amount in a displayed price, with either decimal separator.
+
+    "305,00 €" -> 305.0, "1.234,56 €" -> 1234.56, "£1,234.50" -> 1234.5,
+    "1.299 €" -> 1299.0: a single separator followed by exactly three digits
+    is a thousands separator.
+    """
+    match = _AMOUNT.search(text or "")
+    if match is None:
+        return None
+    number = re.sub(r"['\u00a0\u202f ]", "", match.group())
+    decimal = max(number.rfind("."), number.rfind(","))
+    if decimal != -1 and not ("." in number and "," in number):
+        if number.count(number[decimal]) > 1 or len(number) - decimal - 1 == 3:
+            decimal = -1
+    whole, fraction = (number, "") if decimal == -1 else (number[:decimal], number[decimal + 1:])
+    whole = whole.replace(".", "").replace(",", "")
+    return float(f"{whole}.{fraction}" if fraction else whole)
 
 
 # --- identities --------------------------------------------------------------
@@ -300,15 +361,48 @@ def result_items(route: str, body: dict[str, Any]) -> list[dict[str, Any]]:
     return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
 
 
-def _rich_snippet_extensions(item: dict[str, Any]) -> dict[str, Any]:
+def _rich_snippet(item: dict[str, Any]) -> tuple[dict[str, Any], list[Any]]:
+    """(detected_extensions, extensions) of the first rich-snippet section that has them."""
     snippet = item.get("rich_snippet")
     if not isinstance(snippet, dict):
-        return {}
+        return {}, []
     for part in ("top", "bottom"):
         section = snippet.get(part)
         if isinstance(section, dict) and isinstance(section.get("detected_extensions"), dict):
-            return section["detected_extensions"]
-    return {}
+            shown = section.get("extensions")
+            return section["detected_extensions"], shown if isinstance(shown, list) else []
+    return {}, []
+
+
+def _extensions(values: Any, skip: set[str | None]) -> list[str]:
+    """Short displayed notes; long ones (usually disclaimers) and bare numbers are dropped."""
+    if not isinstance(values, list):
+        return []
+    kept = []
+    for value in values:
+        text = clean_text(value, MAX_EXTENSION_LENGTH + 1)
+        if text is None or len(text) > MAX_EXTENSION_LENGTH or text in skip or not re.search(r"[^\W\d_]", text):
+            continue
+        if text not in kept:
+            kept.append(text)
+    return kept[:MAX_EXTENSIONS]
+
+
+def _price_text(shown: list[Any], detected: float) -> str | None:
+    """The displayed text SerpApi's detected price came from, e.g. "305,00 €".
+
+    SerpApi can drop a decimal comma ("305,00 €" -> 30500), so a text matches
+    when its amount equals the detected number or its digits do.
+    """
+    for raw in shown:
+        text = clean_text(raw, 40)
+        amount = parse_amount(text)
+        if amount is None:
+            continue
+        if math.isclose(amount, detected) or (
+                detected.is_integer() and re.sub(r"\D", "", text) == str(int(detected))):
+            return text
+    return None
 
 
 def lead_from_item(call: CallResult, item: dict[str, Any], position: int,
@@ -324,7 +418,7 @@ def lead_from_item(call: CallResult, item: dict[str, Any], position: int,
             if candidate.site_label != "google":
                 page = candidate
         if item.get("product_link"):
-            google = check_url(item.get("product_link"))
+            google = check_url(encode_query_spaces(item.get("product_link")))
             if google.site_label != "google":
                 raise UrlRejected("product_link is not a Google URL")
             google_url = google.url
@@ -336,17 +430,27 @@ def lead_from_item(call: CallResult, item: dict[str, Any], position: int,
         reviews = _count(item.get("reviews"))
         delivery = clean_text(item.get("delivery"))
         thumbnail = provider_thumbnail(item.get("serpapi_thumbnail")) or provider_thumbnail(item.get("thumbnail"))
+        old_price = clean_text(item.get("old_price"), 40)
+        condition = clean_text(item.get("second_hand_condition"), 40)
+        extensions = _extensions(item.get("extensions"), {price, delivery, condition})
     else:
         page = unwrap_google_redirect(check_url(item.get("link")))
-        ext = _rich_snippet_extensions(item)
+        ext, shown = _rich_snippet(item)
         value = _number(ext.get("price"), 0, 1e7)
-        currency = clean_text(ext.get("currency"), 10)
-        price = f"{ext['price']} {currency or ''}".strip() if value is not None else None
-        price_value = value
+        text = _price_text(shown, value) if value is not None else None
+        if text is not None:
+            price, price_value = text, _number(parse_amount(text), 0, 1e7)
+        elif value is not None:
+            currency = clean_text(ext.get("currency"), 10)
+            price, price_value = f"{ext['price']} {currency or ''}".strip(), value
+        else:
+            price = price_value = None
         rating = _number(ext.get("rating"), 0, 5)
         reviews = _count(ext.get("reviews"))
         delivery = None
         thumbnail = provider_thumbnail(item.get("thumbnail"))
+        old_price = condition = None
+        extensions = _extensions(shown, {price})
 
     site_label = page.site_label if page else None
     platform = match_platform(site_label, merchant, rules)
@@ -376,13 +480,17 @@ def lead_from_item(call: CallResult, item: dict[str, Any], position: int,
         source_key=source_key(site_label, merchant, platform),
         platform=platform.name if platform else None,
         platform_kind=platform.kind if platform else None,
-        page_hint=page_hint(page.url) if page else None,
+        page_hint=page_hint(page.url, platform) if page else None,
         price=price,
         price_value=price_value,
         rating=rating,
         reviews=reviews,
         delivery=delivery,
         thumbnail=thumbnail,
+        snippet=clean_text(item.get("snippet"), MAX_SNIPPET_LENGTH),
+        old_price=old_price,
+        condition=condition,
+        extensions=extensions,
     )
 
 
@@ -408,9 +516,13 @@ def build_leads(calls: list[CallResult], settings: LeadSettings) -> tuple[list[L
     """
     per_call: list[list[Lead]] = []
     rejections: list[dict[str, Any]] = []
+    returned = checked = 0
     for call in calls:
         leads = []
-        for offset, item in enumerate(result_items(call.route, call.body)[: settings.max_leads_per_call]):
+        items = result_items(call.route, call.body)
+        returned += len(items)
+        checked += min(len(items), settings.max_leads_per_call)
+        for offset, item in enumerate(items[: settings.max_leads_per_call]):
             position = _count(item.get("position")) or offset + 1
             try:
                 leads.append(lead_from_item(call, item, position, settings.platforms))
@@ -451,11 +563,13 @@ def build_leads(calls: list[CallResult], settings: LeadSettings) -> tuple[list[L
     final = kept + overflow
     for rank, lead in enumerate(final, start=1):
         lead.rank = rank
-    return final, summarize(final, per_call, calls, rejections)
+    return final, summarize(final, per_call, calls, rejections,
+                            returned, checked, settings.max_leads_per_call)
 
 
 def summarize(leads: list[Lead], per_call: list[list[Lead]], calls: list[CallResult],
-              rejections: list[dict[str, Any]]) -> dict[str, Any]:
+              rejections: list[dict[str, Any]], returned: int, checked: int,
+              max_leads_per_call: int) -> dict[str, Any]:
     sources = Counter(lead.source_key for lead in leads)
     top_source, top_count = sources.most_common(1)[0] if sources else (None, 0)
     seen: set[str] = set()
@@ -465,6 +579,9 @@ def summarize(leads: list[Lead], per_call: list[list[Lead]], calls: list[CallRes
         new_per_call.append({"call_index": call.index, "leads": len(call_leads), "new_sources": len(keys - seen)})
         seen |= keys
     return {
+        "results_returned": returned,
+        "results_checked": checked,  # the first max_leads_per_call of each call
+        "max_leads_per_call": max_leads_per_call,
         "leads": len(leads),
         "duplicates_merged": sum(len(lead.also_found) for lead in leads),
         "distinct_sources": len(sources),
@@ -478,6 +595,7 @@ def summarize(leads: list[Lead], per_call: list[list[Lead]], calls: list[CallRes
         "idn_hosts": sum(1 for lead in leads if lead.idn_host),
         "over_soft_cap": sum(1 for lead in leads if lead.over_soft_cap),
         "rejected": len(rejections),
+        "rejection_reasons": dict(Counter(r["reason"] for r in rejections).most_common()),
         "rejections": rejections[:50],
         "new_sources_per_call": new_per_call,
     }

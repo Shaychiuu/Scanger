@@ -1,74 +1,24 @@
 """Scanger frontend (Gradio). Talks only to the Scanger API.
 
-The open session's ID is the only session state kept in the browser; history is
-always re-read from the API, which reads it from PostgreSQL.
+Two tabs: local search over the dataset, with sessions, and web discovery
+(scanger.discovery_ui). The open session's ID is the only session state kept in
+the browser; history is always re-read from the API, which reads it from
+PostgreSQL.
 
 Run from the repository root (the Scanger and VisualMatch APIs must be running):
     python -m scanger.frontend
 """
 
-import io
 import uuid
-from datetime import datetime
-from functools import lru_cache
 from pathlib import Path
 
 import gradio as gr
-import requests
-from PIL import Image, ImageDraw
 
-from scanger.config import scanger_api_url
+from scanger import discovery_ui, discovery_view
+from scanger.api_client import ApiError, call, fetch_image, local_time
 
-API_URL = scanger_api_url()
-HTTP = requests.Session()
 SEARCH_TIMEOUT = 600  # the first search loads the model in the VisualMatch API
 MODE_LABELS = {"image": "image only", "text": "text only", "composed": "image + text"}
-
-
-class ApiError(Exception):
-    pass
-
-
-def call(method: str, path: str, timeout: float = 30, **kwargs) -> dict | list:
-    try:
-        response = HTTP.request(method, f"{API_URL}{path}", timeout=timeout, **kwargs)
-    except requests.RequestException as exc:
-        raise ApiError(f"Scanger API is not reachable at {API_URL}. Is it running?") from exc
-    if response.status_code >= 400:
-        try:
-            detail = response.json().get("detail")
-        except ValueError:
-            detail = response.text[:300]
-        raise ApiError(f"{detail}")
-    return response.json()
-
-
-@lru_cache(maxsize=1024)
-def _image_bytes(path: str) -> bytes:
-    # Stored assets and saved results are immutable, so caching is safe.
-    # Failures raise and are therefore not cached.
-    response = HTTP.get(f"{API_URL}{path}", timeout=30)
-    response.raise_for_status()
-    return response.content
-
-
-def placeholder(text: str = "Image missing") -> Image.Image:
-    image = Image.new("RGB", (256, 256), (225, 225, 225))
-    ImageDraw.Draw(image).text((70, 120), text, fill=(90, 90, 90))
-    return image
-
-
-def fetch_image(path: str | None) -> Image.Image:
-    if not path:
-        return placeholder()
-    try:
-        return Image.open(io.BytesIO(_image_bytes(path)))
-    except Exception:
-        return placeholder()
-
-
-def local_time(iso: str) -> str:
-    return datetime.fromisoformat(iso).astimezone().strftime("%Y-%m-%d %H:%M")
 
 
 # --- sessions ----------------------------------------------------------------
@@ -227,91 +177,97 @@ with gr.Blocks(title="Scanger") as demo:
     request_id = gr.State(None)
     reuse = gr.State(None)
 
-    gr.Markdown(
-        "# Scanger\nLocal clothing search. Results are images from the DeepFashion "
-        "dataset, not products for sale."
-    )
-    with gr.Row():
-        with gr.Column(scale=1, min_width=260):
-            session_dd = gr.Dropdown(label="Session", choices=[], interactive=True)
-            new_title = gr.Textbox(label="New session title", placeholder="e.g. brown boots")
-            create_btn = gr.Button("Create session")
-            rename_title = gr.Textbox(label="Rename open session")
-            rename_btn = gr.Button("Rename")
-            status = gr.Markdown()
-
-        with gr.Column(scale=4):
+    gr.Markdown("# Scanger")
+    with gr.Tabs():
+        with gr.Tab("Local search"):
+            gr.Markdown(
+                "Local clothing search. Results are images from the DeepFashion "
+                "dataset, not products for sale."
+            )
             with gr.Row():
-                image_in = gr.Image(
-                    label="Reference image",
-                    type="filepath",
-                    image_mode=None,  # pass the uploaded file through unchanged
-                    sources=["upload", "clipboard"],
-                    height=300,
-                )
-                with gr.Column():
-                    text_in = gr.Textbox(label="Description (optional)", lines=3)
-                    alpha_in = gr.Slider(
-                        0, 1, value=0.5, step=0.05,
-                        label="Image weight for image + text (1 = image only, 0 = text only)",
-                    )
-                    preview = gr.Markdown(describe_query(None, "", 0.5, None))
-                    search_btn = gr.Button("Search", variant="primary")
+                with gr.Column(scale=1, min_width=260):
+                    session_dd = gr.Dropdown(label="Session", choices=[], interactive=True)
+                    new_title = gr.Textbox(label="New session title", placeholder="e.g. brown boots")
+                    create_btn = gr.Button("Create session")
+                    rename_title = gr.Textbox(label="Rename open session")
+                    rename_btn = gr.Button("Rename")
+                    status = gr.Markdown()
 
-            @gr.render(inputs=[session_id, history_version])
-            def render_history(sid, _version):
-                if not sid:
-                    gr.Markdown("_Create a session or open one to start._")
-                    return
-                try:
-                    detail = call("GET", f"/sessions/{sid}")
-                except ApiError as exc:
-                    gr.Markdown(f"**Error:** {exc}")
-                    return
-                gr.Markdown(f"## {detail['title']}")
-                if not detail["turns"]:
-                    gr.Markdown("_No searches yet in this session._")
-                for turn in detail["turns"]:
-                    with gr.Group():
-                        gr.Markdown(
-                            f"### Turn {turn['ordinal']}  ·  {local_time(turn['created_at'])}  \n"
-                            f"**Description:** {turn['prompt_text'] or '—'}"
+                with gr.Column(scale=4):
+                    with gr.Row():
+                        image_in = gr.Image(
+                            label="Reference image",
+                            type="filepath",
+                            image_mode=None,  # pass the uploaded file through unchanged
+                            sources=["upload", "clipboard"],
+                            height=300,
                         )
-                        with gr.Row():
-                            ref = turn["reference_asset"]
-                            with gr.Column(scale=1, min_width=160):
-                                if ref:
-                                    gr.Image(
-                                        value=fetch_image(ref["url"]),
-                                        label=ref["original_name"] or "Reference",
-                                        interactive=False,
-                                        height=180,
-                                    )
-                                    reuse_btn = gr.Button("Use this reference", size="sm")
-                                    reuse_btn.click(
-                                        lambda t=turn: reuse_reference(t),
-                                        outputs=[image_in, reuse],
-                                    )
-                                else:
-                                    gr.Markdown("_No reference image_")
-                                retry_btn = gr.Button("Run again", size="sm")
-                                retry_btn.click(
-                                    lambda v, tid=turn["id"]: retry(tid, v),
-                                    inputs=[history_version],
-                                    outputs=[history_version, status],
+                        with gr.Column():
+                            text_in = gr.Textbox(label="Description (optional)", lines=3)
+                            alpha_in = gr.Slider(
+                                0, 1, value=0.5, step=0.05,
+                                label="Image weight for image + text (1 = image only, 0 = text only)",
+                            )
+                            preview = gr.Markdown(describe_query(None, "", 0.5, None))
+                            search_btn = gr.Button("Search", variant="primary")
+
+                    @gr.render(inputs=[session_id, history_version])
+                    def render_history(sid, _version):
+                        if not sid:
+                            gr.Markdown("_Create a session or open one to start._")
+                            return
+                        try:
+                            detail = call("GET", f"/sessions/{sid}")
+                        except ApiError as exc:
+                            gr.Markdown(f"**Error:** {exc}")
+                            return
+                        gr.Markdown(f"## {detail['title']}")
+                        if not detail["turns"]:
+                            gr.Markdown("_No searches yet in this session._")
+                        for turn in detail["turns"]:
+                            with gr.Group():
+                                gr.Markdown(
+                                    f"### Turn {turn['ordinal']}  ·  {local_time(turn['created_at'])}  \n"
+                                    f"**Description:** {turn['prompt_text'] or '—'}"
                                 )
-                            with gr.Column(scale=5):
-                                runs = turn["runs"]
-                                for run in runs[:-1]:
-                                    with gr.Accordion(
-                                        f"Earlier run {run['attempt']} ({run['status']})",
-                                        open=False,
-                                    ):
-                                        gr.Markdown(run_summary(run))
-                                        result_gallery(run)
-                                if runs:
-                                    gr.Markdown(run_summary(runs[-1]))
-                                    result_gallery(runs[-1])
+                                with gr.Row():
+                                    ref = turn["reference_asset"]
+                                    with gr.Column(scale=1, min_width=160):
+                                        if ref:
+                                            gr.Image(
+                                                value=fetch_image(ref["url"]),
+                                                label=ref["original_name"] or "Reference",
+                                                interactive=False,
+                                                height=180,
+                                            )
+                                            reuse_btn = gr.Button("Use this reference", size="sm")
+                                            reuse_btn.click(
+                                                lambda t=turn: reuse_reference(t),
+                                                outputs=[image_in, reuse],
+                                            )
+                                        else:
+                                            gr.Markdown("_No reference image_")
+                                        retry_btn = gr.Button("Run again", size="sm")
+                                        retry_btn.click(
+                                            lambda v, tid=turn["id"]: retry(tid, v),
+                                            inputs=[history_version],
+                                            outputs=[history_version, status],
+                                        )
+                                    with gr.Column(scale=5):
+                                        runs = turn["runs"]
+                                        for run in runs[:-1]:
+                                            with gr.Accordion(
+                                                f"Earlier run {run['attempt']} ({run['status']})",
+                                                open=False,
+                                            ):
+                                                gr.Markdown(run_summary(run))
+                                                result_gallery(run)
+                                        if runs:
+                                            gr.Markdown(run_summary(runs[-1]))
+                                            result_gallery(runs[-1])
+
+        with gr.Tab("Web discovery") as discovery_tab:
+            discovery_ui.build(discovery_tab)
 
     query_inputs = [image_in, text_in, alpha_in, reuse]
     for trigger in (image_in.change, text_in.change, alpha_in.change, reuse.change):
@@ -335,4 +291,4 @@ with gr.Blocks(title="Scanger") as demo:
 
 
 if __name__ == "__main__":
-    demo.launch(server_name="127.0.0.1", server_port=7861, share=False)
+    demo.launch(server_name="127.0.0.1", server_port=7861, share=False, css=discovery_view.CSS)

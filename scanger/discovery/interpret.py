@@ -46,7 +46,7 @@ from scanger.config import (
     upload_limits,
 )
 
-PROMPT_VERSION = "interpret-v1"
+PROMPT_VERSION = "interpret-v2"
 OUTPUT_TOKEN_TARGET = (200, 300)
 
 PROMPT_TEMPLATE = """\
@@ -76,7 +76,10 @@ attributes and the user's changes.
 retail terms for the garment and its key features.
   - broad: 3 to 5 words; garment type, colour and the main requested change only.
   Use only details visible in the image or stated by the user. No brand names \
-unless visible or stated.
+unless visible or stated. Do not claim what the image cannot establish: for a \
+look, use the neutral retail term ("puffer jacket", not "down jacket"; "fur \
+collar", not "real fur" or "faux fur") unless the user's text specifies it. \
+Name each feature once per query.
 
 Keep the whole object under 250 tokens.
 

@@ -129,35 +129,46 @@ google_domain = "google.it"
 # Matched on a result's registrable domain label (zalando.de -> "zalando") or the
 # start of the merchant name a shopping result shows ("Etsy", "eBay - shop42").
 # kind: marketplace | second_hand | social | aggregator | retailer
+# product_path (optional): regular expression found in the URL path of the
+# platform's product pages (TOML literal string, '...'). Its other pages
+# (searches, categories, shops) are then marked "category like". Without it,
+# generic path guesses apply. Check with --replay after editing.
 # ASSUMPTION: a starter list; add the large retailers that crowd your results.
 
 [platforms.etsy]
 kind = "marketplace"
 labels = ["etsy"]
+product_path = '/listing/\d+'
 
 [platforms.amazon]
 kind = "marketplace"
 labels = ["amazon"]
+product_path = '/(dp|gp/product)/'
 
 [platforms.ebay]
 kind = "marketplace"
 labels = ["ebay"]
+product_path = '^/(itm|p)/'
 
 [platforms.zalando]
 kind = "marketplace"
 labels = ["zalando"]
+product_path = '\.html$'
 
 [platforms.otto]
 kind = "marketplace"
 labels = ["otto"]
+product_path = '^/p/'
 
 [platforms.aboutyou]
 kind = "marketplace"
 labels = ["aboutyou"]
+product_path = '^/p/'
 
 [platforms.notonthehighstreet]
 kind = "marketplace"
 labels = ["notonthehighstreet"]
+product_path = '/product/'
 
 [platforms.temu]
 kind = "marketplace"
@@ -166,6 +177,7 @@ labels = ["temu"]
 [platforms.aliexpress]
 kind = "marketplace"
 labels = ["aliexpress"]
+product_path = '^/item/'
 
 [platforms.shein]
 kind = "retailer"
@@ -174,22 +186,27 @@ labels = ["shein"]
 [platforms.asos]
 kind = "retailer"
 labels = ["asos"]
+product_path = '/prd/\d+'
 
 [platforms.vinted]
 kind = "second_hand"
 labels = ["vinted"]
+product_path = '^/items/\d+'
 
 [platforms.depop]
 kind = "second_hand"
 labels = ["depop"]
+product_path = '^/products/'
 
 [platforms.vestiairecollective]
 kind = "second_hand"
 labels = ["vestiairecollective"]
+product_path = '\.shtml$'
 
 [platforms.kleinanzeigen]
 kind = "second_hand"
 labels = ["kleinanzeigen"]
+product_path = '^/s-anzeige/'
 
 [platforms.pinterest]
 kind = "social"

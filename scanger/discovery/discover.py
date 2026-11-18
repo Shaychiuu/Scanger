@@ -17,6 +17,9 @@ Commands, run by the owner (settings: discovery.toml):
     python -m scanger.discover --replay ID     Re-normalize saved responses. No network.
     python -m scanger.discover --list          List saved runs.
 
+The app's "Web discovery" tab does the same through the Scanger API
+(scanger.discovery_service) and reads and writes the same run files.
+
 Options: --markets de-at,fr (market ids, or a language for all its markets)
          --max-calls N  --no-modifiers  --no-sites  --yes
          --plan-only (save and show the plan, send nothing to SerpApi)
@@ -39,12 +42,14 @@ import json
 import os
 import re
 import sys
+import threading
 import tomllib
 import uuid
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 from scanger import assets
 from scanger.config import (
@@ -73,6 +78,7 @@ RECORD_VERSION = 1
 RECORD_DIR = "discovery"
 HARD_MAX_CALLS = 50  # the free plan's hourly limit; protects against config typos
 MAX_QUERIES_FILE_BYTES = 100_000
+MAX_PATTERN_CHARS = 200
 PRINT_LEADS = 60
 
 ROUTES = tuple(ENGINES)
@@ -95,6 +101,10 @@ class SettingsError(Exception):
 
 class DiscoveryError(Exception):
     """Expected problem; the message is shown to the owner."""
+
+
+class RunNotFound(DiscoveryError):
+    pass
 
 
 # --- settings ----------------------------------------------------------------
@@ -249,11 +259,20 @@ def parse_settings(data: dict[str, Any], source: str = "") -> Settings:
     for name, raw in _mapping(top.get("platforms", {}), "platforms").items():
         where = f"platforms.{name}"
         _str(name, where, _LABEL)
-        table = _table(raw, where, {"kind", "labels"}, {"kind", "labels"})
+        table = _table(raw, where, {"kind", "labels", "product_path"}, {"kind", "labels"})
         if table["kind"] not in PLATFORM_KINDS:
             raise SettingsError(f"{where}.kind must be one of {list(PLATFORM_KINDS)}.")
         labels = tuple(_str(v, f"{where}.labels", _LABEL) for v in _list(table["labels"], f"{where}.labels"))
-        platforms.append(PlatformRule(name=name, kind=table["kind"], labels=labels))
+        product_path = table.get("product_path")
+        if product_path is not None:
+            if not isinstance(product_path, str) or not 1 <= len(product_path) <= MAX_PATTERN_CHARS:
+                raise SettingsError(f"{where}.product_path must be a regular expression "
+                                    f"of 1 to {MAX_PATTERN_CHARS} characters.")
+            try:
+                re.compile(product_path)
+            except re.error as exc:
+                raise SettingsError(f"{where}.product_path is not a valid regular expression: {exc}") from None
+        platforms.append(PlatformRule(name=name, kind=table["kind"], labels=labels, product_path=product_path))
 
     return Settings(
         markets=markets,
@@ -491,7 +510,7 @@ def find_record(root: Path, ref: str) -> uuid.UUID:
         if str(record_id) == name and name.startswith(ref):
             matches.append(record_id)
     if not matches:
-        raise DiscoveryError(f"No saved discovery run starts with {ref!r}.")
+        raise RunNotFound(f"No saved discovery run starts with {ref!r}.")
     if len(matches) > 1:
         raise DiscoveryError(f"{ref!r} matches {len(matches)} runs; give more characters.")
     return matches[0]
@@ -507,21 +526,77 @@ def load_record(root: Path, record_id: uuid.UUID) -> dict[str, Any]:
     return record
 
 
+def new_record(kind: str, settings: Settings, user_text: str | None) -> dict[str, Any]:
+    return {
+        "record_version": RECORD_VERSION,
+        "id": str(uuid.uuid4()),
+        "created_at": _now(),
+        "status": "preparing",
+        "provider": "serpapi",
+        "source": {"kind": kind, "user_text": user_text or None},
+        "settings": settings_json(settings),
+        "interpretation": None,
+        "localization": None,
+        "queries": {},
+        "account_before": None,
+        "calls": [],
+        "leads": [],
+        "summary": None,
+    }
+
+
 def save_record(root: Path, record: dict[str, Any], calls: list[Call]) -> None:
     record["calls"] = [asdict(c) for c in calls]
     record["updated_at"] = _now()
     write_json(record_path(root, uuid.UUID(record["id"])), record)
 
 
+def save_plan(root: Path, record: dict[str, Any], settings: Settings,
+              queries: dict[str, dict[str, str]]) -> list[Call]:
+    """Plan the calls for `queries` and save the record as "planned" (nothing is sent)."""
+    record["queries"] = queries
+    calls = build_plan(settings, queries)
+    record["status"] = "planned"
+    save_record(root, record, calls)
+    write_json(record_path(root, uuid.UUID(record["id"]), "queries.json"), queries, ensure_ascii=False)
+    return calls
+
+
 def settings_json(settings: Settings) -> dict[str, Any]:
     return asdict(settings)
+
+
+def lead_settings_from_json(data: dict[str, Any]) -> LeadSettings:
+    """The lead settings saved in a record (see settings_json)."""
+    return LeadSettings(
+        max_leads_per_call=data["max_leads_per_call"],
+        soft_cap_per_source=data["soft_cap_per_source"],
+        soft_cap_per_marketplace=data["soft_cap_per_marketplace"],
+        platforms=tuple(
+            PlatformRule(name=p["name"], kind=p["kind"], labels=tuple(p["labels"]),
+                         product_path=p.get("product_path"))
+            for p in data.get("platforms", [])
+        ),
+    )
+
+
+_CALL_FIELDS = {f.name for f in dataclasses.fields(Call)}
+_LEAD_FIELDS = {f.name for f in dataclasses.fields(Lead)}
+
+
+def calls_from_json(record: dict[str, Any]) -> list[Call]:
+    return [Call(**{k: v for k, v in c.items() if k in _CALL_FIELDS}) for c in record.get("calls", [])]
+
+
+def leads_from_json(items: list[dict[str, Any]]) -> list[Lead]:
+    return [Lead(**{k: v for k, v in item.items() if k in _LEAD_FIELDS}) for item in items]
 
 
 def run_json(run: InterpretationRun | None) -> dict[str, Any] | None:
     return asdict(run) if run is not None else None
 
 
-def saved_calls(root: Path, record: dict[str, Any]) -> list[CallResult]:
+def saved_calls(root: Path, record: dict[str, Any], out: TextIO | None = None) -> list[CallResult]:
     """Load the raw responses of a record's successful calls (offline)."""
     record_id = uuid.UUID(record["id"])
     results = []
@@ -532,7 +607,7 @@ def saved_calls(root: Path, record: dict[str, Any]) -> list[CallResult]:
         try:
             body = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            print(f"  (raw response {call['raw_file']} is missing or unreadable; skipped)")
+            print(f"  (raw response {call['raw_file']} is missing or unreadable; skipped)", file=out)
             continue
         results.append(CallResult(
             index=call["index"], route=call["route"], market=call["market"],
@@ -545,25 +620,35 @@ def saved_calls(root: Path, record: dict[str, Any]) -> list[CallResult]:
 # --- running -------------------------------------------------------------------
 
 
-def execute(root: Path, record: dict[str, Any], calls: list[Call], client: SerpApiClient) -> None:
-    """Run the planned calls in order, saving after each one (partial results survive)."""
+def execute(root: Path, record: dict[str, Any], calls: list[Call], client: SerpApiClient,
+            out: TextIO | None = None, cancel: threading.Event | None = None,
+            on_result: Callable[[Call, dict[str, Any]], None] | None = None) -> None:
+    """Run the planned calls in order, saving after each one (partial results survive).
+
+    Setting `cancel` stops before the next call; a call already sent is not
+    interrupted. `on_result(call, body)` runs after each successful call,
+    before the record is saved.
+    """
     stop_reason = None
     try:
         for call in calls:
             if call.status != "planned":
                 continue
+            if cancel is not None and cancel.is_set():
+                _cancel_rest(root, record, calls)
+                return
             if stop_reason:
                 call.status, call.note = "not_run", stop_reason
                 continue
             label = f"[{call.index:02d}] {call.route:<8} {call.market} {call.q}"
-            print(f"{label} ...", end=" ", flush=True)
+            print(f"{label} ...", end=" ", flush=True, file=out)
             call.retrieved_at = _now()
             try:
                 response = client.search(call.params)
             except ProviderError as exc:
                 call.status, call.error_kind, call.note = "failed", exc.kind, exc.message
                 call.http_status = exc.http_status
-                print(f"failed: {exc.message}")
+                print(f"failed: {exc.message}", file=out)
                 if exc.fatal:
                     stop_reason = f"stopped after: {exc.message}"
             else:
@@ -576,15 +661,21 @@ def execute(root: Path, record: dict[str, Any], calls: list[Call], client: SerpA
                 call.result_count = len(result_items(call.route, response.body))
                 call.status = "ok" if call.result_count else "empty"
                 call.note = clean_text(response.empty_message, 300)
-                print(f"{call.result_count} results ({call.duration_s}s)")
+                print(f"{call.result_count} results ({call.duration_s}s)", file=out)
+                if on_result is not None:
+                    on_result(call, response.body)
             save_record(root, record, calls)
     except KeyboardInterrupt:
-        print("\nCancelled.")
-        for call in calls:
-            if call.status == "planned":
-                call.status, call.note = "not_run", "cancelled by owner"
-        record["cancelled"] = True
-        save_record(root, record, calls)
+        print("\nCancelled.", file=out)
+        _cancel_rest(root, record, calls)
+
+
+def _cancel_rest(root: Path, record: dict[str, Any], calls: list[Call]) -> None:
+    for call in calls:
+        if call.status == "planned":
+            call.status, call.note = "not_run", "cancelled by owner"
+    record["cancelled"] = True
+    save_record(root, record, calls)
 
 
 def overall_status(calls: list[Call], cancelled: bool) -> str:
@@ -599,6 +690,29 @@ def overall_status(calls: list[Call], cancelled: bool) -> str:
     return "completed"
 
 
+def finish_run(root: Path, record: dict[str, Any], calls: list[Call],
+               lead_settings: LeadSettings) -> tuple[list[Lead], dict[str, Any]]:
+    """Set the final status and build the leads from the saved responses."""
+    record["status"] = overall_status(calls, record.get("cancelled", False))
+    leads, summary = build_leads(saved_calls(root, record), lead_settings)
+    record["leads"] = [asdict(lead) for lead in leads]
+    record["summary"] = summary
+    record["finished_at"] = _now()
+    save_record(root, record, calls)
+    return leads, summary
+
+
+def quota_problem(account: AccountStatus, planned: int) -> str | None:
+    """Why the account cannot run `planned` searches now, or None."""
+    if account.searches_left is not None and planned > account.searches_left:
+        return f"The plan needs {planned} searches but only {account.searches_left} are left this month."
+    if account.hourly_limit and account.this_hour_searches is not None \
+            and planned > account.hourly_limit - account.this_hour_searches:
+        return (f"The plan needs {planned} searches but only "
+                f"{account.hourly_limit - account.this_hour_searches} are left this hour.")
+    return None
+
+
 # --- output --------------------------------------------------------------------
 
 
@@ -611,12 +725,12 @@ def _ask(question: str, assume_yes: bool) -> bool:
         return False
 
 
-def print_queries(queries: dict[str, dict[str, str]]) -> None:
-    print("\nQueries:")
+def print_queries(queries: dict[str, dict[str, str]], out: TextIO | None = None) -> None:
+    print("\nQueries:", file=out)
     for code, entry in queries.items():
         for kind in QUERY_KEYS:
             if kind in entry:
-                print(f"  {code} {kind:<8} {entry[kind]}")
+                print(f"  {code} {kind:<8} {entry[kind]}", file=out)
 
 
 def print_plan(calls: list[Call]) -> None:
@@ -630,9 +744,9 @@ def print_plan(calls: list[Call]) -> None:
     print(f"{planned} call(s) planned; x = not sent.")
 
 
-def print_leads(leads: list[Lead]) -> None:
-    print("\nLeads (search results, unverified: prices, ratings and delivery are claims shown by Google)")
-    for lead in leads[:PRINT_LEADS]:
+def print_leads(leads: list[Lead], out: TextIO | None = None, limit: int | None = PRINT_LEADS) -> None:
+    print("\nLeads (search results, unverified: prices, ratings and delivery are claims shown by Google)", file=out)
+    for lead in leads[:limit]:
         tags = [lead.source_key]
         if lead.platform_kind:
             tags.append(lead.platform_kind)
@@ -643,56 +757,67 @@ def print_leads(leads: list[Lead]) -> None:
         if lead.idn_host:
             tags.append("IDN HOST: check spelling")
         price = f"  {lead.price}*" if lead.price else ""
-        print(f"\n#{lead.rank:<3} [{lead.route} {lead.market}] {' · '.join(tags)}{price}")
-        print(f"     {clean_text(lead.title, 120) or '(no title)'}")
+        print(f"\n#{lead.rank:<3} [{lead.route} {lead.market}] {' · '.join(tags)}{price}", file=out)
+        print(f"     {clean_text(lead.title, 120) or '(no title)'}", file=out)
         if lead.url:
-            print(f"     {lead.url}")
+            print(f"     {lead.url}", file=out)
         else:
             merchant = f"{lead.merchant}; " if lead.merchant else ""
-            print(f"     no shop URL ({merchant}Google product page): {lead.google_url}")
+            print(f"     no shop URL ({merchant}Google product page): {lead.google_url}", file=out)
         if lead.also_found:
             seen = ", ".join(f"call {f['call_index']} #{f['position']}" for f in lead.also_found[:5])
-            print(f"     also found in: {seen}")
-    if len(leads) > PRINT_LEADS:
-        print(f"\n... {len(leads) - PRINT_LEADS} more in record.json")
+            print(f"     also found in: {seen}", file=out)
+    if limit is not None and len(leads) > limit:
+        print(f"\n... {len(leads) - limit} more in record.json", file=out)
 
 
-def print_summary(summary: dict[str, Any], calls: list[dict[str, Any]] | list[Call]) -> None:
+def print_summary(summary: dict[str, Any], calls: list[dict[str, Any]] | list[Call],
+                  out: TextIO | None = None) -> None:
+    """Records saved by older versions lack some summary keys; those lines are skipped."""
     statuses: dict[str, int] = {}
     for call in calls:
         status = call["status"] if isinstance(call, dict) else call.status
         statuses[status] = statuses.get(status, 0) + 1
-    print("\nSummary")
-    print("  calls:   " + ", ".join(f"{n} {s}" for s, n in sorted(statuses.items())))
+    print("\nSummary", file=out)
+    print("  calls:   " + ", ".join(f"{n} {s}" for s, n in sorted(statuses.items())), file=out)
+    returned, checked = summary.get("results_returned"), summary.get("results_checked")
+    if returned is not None and checked is not None:
+        beyond = (f"; the other {returned - checked} are past max_leads_per_call = "
+                  f"{summary['max_leads_per_call']} and stay in raw/ only" if returned > checked else "")
+        print(f"  results: {returned} returned, {checked} checked{beyond}", file=out)
     if summary["leads"]:
         print(f"  leads:   {summary['leads']} ({summary['duplicates_merged']} duplicates merged), "
               f"{summary['distinct_sources']} distinct sources, {summary['distinct_sites']} sites; "
-              f"top source {summary['top_source']} ({summary['top_source_share']:.0%})")
+              f"top source {summary['top_source']} ({summary['top_source_share']:.0%})", file=out)
     else:
-        print("  leads:   none. This does not mean nothing exists; only these queries found nothing.")
+        print("  leads:   none. This does not mean nothing exists; only these queries found nothing.", file=out)
     for label, key in (("route", "by_route"), ("market", "by_market"), ("platform", "by_platform_kind")):
-        print(f"  {label + ':':<9}" + ", ".join(f"{k} {v}" for k, v in sorted(summary[key].items())))
+        print(f"  {label + ':':<9}" + ", ".join(f"{k} {v}" for k, v in sorted(summary[key].items())), file=out)
     if summary["without_page_url"]:
-        print(f"  {summary['without_page_url']} shopping lead(s) have no shop URL, only a Google product page.")
+        print(f"  {summary['without_page_url']} shopping lead(s) have no shop URL, only a Google product page.",
+              file=out)
     if summary["idn_hosts"]:
-        print(f"  {summary['idn_hosts']} lead(s) use internationalized (punycode) host names; check the spelling.")
+        print(f"  {summary['idn_hosts']} lead(s) use internationalized (punycode) host names; check the spelling.",
+              file=out)
     if summary["rejected"]:
-        print(f"  {summary['rejected']} result(s) rejected (unsafe or missing URL); reasons in record.json.")
+        reasons = ", ".join(f"{reason} ({n})" for reason, n in list(summary.get("rejection_reasons", {}).items())[:3])
+        print(f"  {summary['rejected']} result(s) rejected for their URL: {reasons or 'see record.json'}. "
+              "Details in record.json.", file=out)
     curve = ", ".join(f"{c['call_index']:02d}:+{c['new_sources']}" for c in summary["new_sources_per_call"])
-    print(f"  new sources per call: {curve}")
+    print(f"  new sources per call: {curve}", file=out)
 
 
-def print_account(account: AccountStatus) -> None:
+def print_account(account: AccountStatus, out: TextIO | None = None) -> None:
     print(f"\nSerpApi account: {clean_text(account.plan_name) or 'unknown plan'}, "
           f"{account.searches_left if account.searches_left is not None else '?'} searches left this month, "
           f"{account.this_hour_searches if account.this_hour_searches is not None else '?'}"
-          f"/{account.hourly_limit or '?'} used this hour.")
+          f"/{account.hourly_limit or '?'} used this hour.", file=out)
 
 
 # --- query sources --------------------------------------------------------------
 
 
-def _cursor_selection():
+def cursor_selection():
     from cursor_sdk import Cursor, CursorAgentError
 
     from scanger.interpret import model_selection
@@ -700,8 +825,8 @@ def _cursor_selection():
     api_key = cursor_api_key()
     model_id = interpret_model()
     if api_key is None or model_id is None:
-        raise DiscoveryError("CURSOR_API_KEY and INTERPRET_MODEL must be set for LLM queries "
-                             "(or pass --queries FILE).")
+        raise DiscoveryError("CURSOR_API_KEY and INTERPRET_MODEL must be set in .env for LLM queries "
+                             "(or write your own queries).")
     try:
         selection = model_selection(Cursor.models.list(api_key=api_key), model_id, interpret_model_params())
     except CursorAgentError as exc:
@@ -712,46 +837,74 @@ def _cursor_selection():
 
 
 def _localize_into(record: dict, queries: dict, interpretation: dict, languages: list[str],
-                   settings: Settings, selection, api_key: str) -> None:
+                   settings: Settings, selection, api_key: str, out: TextIO | None = None) -> None:
     from scanger.localize import localize
 
     targets = {code: settings.countries(code) for code in languages}
-    print(f"Writing queries for {', '.join(languages)} (text only) ...")
+    print(f"Writing queries for {', '.join(languages)} (text only) ...", file=out)
     run = localize(interpretation, targets, selection, api_key)
     record["localization"] = run_json(run)
-    _print_llm_run("localization", run)
+    _print_llm_run("localization", run, out)
     if run.status != "finished" or run.problems:
         raise DiscoveryError("Localization failed; nothing was sent to SerpApi. "
-                             "Try again, use fewer --languages, or pass --queries FILE.")
+                             "Try again, choose fewer markets, or write your own queries.")
     queries.update(run.data)
 
 
-def _print_llm_run(name: str, run: InterpretationRun) -> None:
+def _print_llm_run(name: str, run: InterpretationRun, out: TextIO | None = None) -> None:
     usage = f"in={run.usage.input_tokens} out={run.usage.output_tokens}" if run.usage else "tokens n/a"
-    print(f"  {name}: {run.status}, {run.duration_s:.1f}s, {usage}, billing: {run.billed}")
+    print(f"  {name}: {run.status}, {run.duration_s:.1f}s, {usage}, billing: {run.billed}", file=out)
     if run.error:
-        print(f"  error: {run.error}")
+        print(f"  error: {run.error}", file=out)
     for problem in run.problems:
-        print(f"  invalid: {problem}")
+        print(f"  invalid: {problem}", file=out)
+
+
+def prepare_image(record: dict, data: bytes, name: str | None) -> tuple[bytes, assets.ImageInfo]:
+    """Validate the image and re-encode it without metadata for sending;
+    describe it in the record. Raises assets.AssetError."""
+    info = assets.inspect_image(data, upload_limits())
+    sent = assets.without_metadata(data, info)
+    record["source"]["image"] = {
+        "name": clean_text(name, 200), "sha256": info.sha256, "mime_type": info.mime_type,
+        "width": info.width, "height": info.height, "byte_size": info.byte_size, "sent_byte_size": len(sent),
+    }
+    return sent, info
+
+
+def image_queries(record: dict, sent: bytes, mime_type: str, text: str, settings: Settings,
+                  selection, api_key: str, out: TextIO | None = None) -> dict:
+    """Interpret the image and text, then write queries for the other selected
+    languages (text only). Both LLM runs are kept in the record."""
+    from scanger.interpret import interpret
+
+    run = interpret(sent, mime_type, text, selection, api_key)
+    record["interpretation"] = run_json(run)
+    _print_llm_run("interpretation", run, out)
+    if run.status != "finished" or run.problems:
+        raise DiscoveryError("Interpretation failed; nothing was sent to SerpApi.")
+    for key, value in run.data.items():
+        if key != "queries":
+            shown = "; ".join(value) if isinstance(value, list) else value
+            print(f"  {key}: {clean_text(shown, 300) or '-'}", file=out)
+
+    queries, _ = clean_queries({"en": run.data["queries"]} if "en" in settings.languages else {},
+                               settings.languages)
+    others = [code for code in settings.languages if code != "en"]
+    if others:
+        _localize_into(record, queries, run.data, others, settings, selection, api_key, out)
+    return queries
 
 
 def queries_from_image(record: dict, image_path: Path, text: str, settings: Settings,
                        assume_yes: bool) -> dict:
-    from scanger.interpret import interpret
-
     try:
-        data = image_path.read_bytes()
-        info = assets.inspect_image(data, upload_limits())
+        sent, info = prepare_image(record, image_path.read_bytes(), image_path.name)
     except OSError as exc:
         raise DiscoveryError(f"Cannot read {image_path}: {exc.strerror}") from None
     except assets.AssetError as exc:
         raise DiscoveryError(f"Cannot use {image_path.name}: {exc}") from None
-    sent = assets.without_metadata(data, info)
-    record["source"]["image"] = {
-        "name": clean_text(image_path.name, 200), "sha256": info.sha256, "mime_type": info.mime_type,
-        "width": info.width, "height": info.height, "byte_size": info.byte_size, "sent_byte_size": len(sent),
-    }
-    selection, api_key = _cursor_selection()
+    selection, api_key = cursor_selection()
     others = [code for code in settings.languages if code != "en"]
     then = f", then the interpretation (text only) to write queries in {', '.join(others)}" if others else ""
     print(f"This sends {image_path.name} ({info.width}x{info.height}, re-encoded without metadata, "
@@ -759,22 +912,7 @@ def queries_from_image(record: dict, image_path: Path, text: str, settings: Sett
           f"{selection.id}{then}.")
     if not _ask("Send to Cursor?", assume_yes):
         raise DiscoveryError("Not sent.")
-
-    run = interpret(sent, info.mime_type, text, selection, api_key)
-    record["interpretation"] = run_json(run)
-    _print_llm_run("interpretation", run)
-    if run.status != "finished" or run.problems:
-        raise DiscoveryError("Interpretation failed; nothing was sent to SerpApi.")
-    for key, value in run.data.items():
-        if key != "queries":
-            shown = "; ".join(value) if isinstance(value, list) else value
-            print(f"  {key}: {clean_text(shown, 300) or '-'}")
-
-    queries, _ = clean_queries({"en": run.data["queries"]} if "en" in settings.languages else {},
-                               settings.languages)
-    if others:
-        _localize_into(record, queries, run.data, others, settings, selection, api_key)
-    return queries
+    return image_queries(record, sent, info.mime_type, text, settings, selection, api_key)
 
 
 def queries_from_record(root: Path, record: dict, ref: str, settings: Settings, assume_yes: bool) -> dict:
@@ -794,7 +932,7 @@ def queries_from_record(root: Path, record: dict, ref: str, settings: Settings, 
     if missing and interpretation:
         print(f"The saved run has no queries for {', '.join(missing)}.")
         if _ask("Write them with Cursor from the saved interpretation (text only)?", assume_yes):
-            selection, api_key = _cursor_selection()
+            selection, api_key = cursor_selection()
             _localize_into(record, queries, interpretation, missing, settings, selection, api_key)
     return queries
 
@@ -844,25 +982,9 @@ def command_replay(root: Path, ref: str, settings: Settings) -> int:
 
 
 def command_search(args: argparse.Namespace, root: Path, settings: Settings) -> int:
-    record_id = uuid.uuid4()
     kind = "image" if args.image else ("queries_file" if args.queries else "record")
-    record: dict[str, Any] = {
-        "record_version": RECORD_VERSION,
-        "id": str(record_id),
-        "created_at": _now(),
-        "status": "preparing",
-        "provider": "serpapi",
-        "source": {"kind": kind, "user_text": args.text or None},
-        "settings": settings_json(settings),
-        "interpretation": None,
-        "localization": None,
-        "queries": {},
-        "account_before": None,
-        "calls": [],
-        "leads": [],
-        "summary": None,
-    }
-    calls: list[Call] = []
+    record = new_record(kind, settings, args.text)
+    record_id = uuid.UUID(record["id"])
     try:
         if args.image:
             queries = queries_from_image(record, args.image, args.text or "", settings, args.yes)
@@ -876,15 +998,11 @@ def command_search(args: argparse.Namespace, root: Path, settings: Settings) -> 
     except DiscoveryError:
         if record["interpretation"] is not None:
             record["status"] = "failed"
-            save_record(root, record, calls)
+            save_record(root, record, [])
             print(f"(LLM output saved in run {record_id})")
         raise
 
-    record["queries"] = queries
-    calls = build_plan(settings, queries)
-    record["status"] = "planned"
-    save_record(root, record, calls)
-    write_json(record_path(root, record_id, "queries.json"), queries, ensure_ascii=False)
+    calls = save_plan(root, record, settings, queries)
     print_queries(queries)
     print_plan(calls)
     print(f"\nSaved as run {record_id}.")
@@ -908,13 +1026,9 @@ def command_search(args: argparse.Namespace, root: Path, settings: Settings) -> 
         return 1
     print_account(account)
     record["account_before"] = asdict(account)
-    if account.searches_left is not None and planned > account.searches_left:
-        print(f"The plan needs {planned} searches but only {account.searches_left} are left. "
-              "Lower --max-calls or --languages.")
-        return 1
-    if account.hourly_limit and account.this_hour_searches is not None \
-            and planned > account.hourly_limit - account.this_hour_searches:
-        print("The plan would exceed this hour's SerpApi limit. Wait or lower --max-calls.")
+    problem = quota_problem(account, planned)
+    if problem:
+        print(f"{problem} Lower --max-calls, use fewer --markets, or wait.")
         return 1
     if not _ask(f"Run {planned} SerpApi searches? Each successful, uncached search uses 1 from your plan.", args.yes):
         print(f"Not sent. The plan is saved as run {record_id}.")
@@ -923,12 +1037,7 @@ def command_search(args: argparse.Namespace, root: Path, settings: Settings) -> 
     record["status"] = "running"
     save_record(root, record, calls)
     execute(root, record, calls, client)
-    record["status"] = overall_status(calls, record.get("cancelled", False))
-    leads, summary = build_leads(saved_calls(root, record), settings.leads)
-    record["leads"] = [asdict(lead) for lead in leads]
-    record["summary"] = summary
-    record["finished_at"] = _now()
-    save_record(root, record, calls)
+    leads, summary = finish_run(root, record, calls, settings.leads)
     print_leads(leads)
     print_summary(summary, calls)
     print(f"\nRun {record_id}: {record['status']}. Replay for free: python -m scanger.discover --replay {str(record_id)[:8]}")
